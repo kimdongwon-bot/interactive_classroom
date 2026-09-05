@@ -1,0 +1,33 @@
+{
+  "active_course": "원가회계",
+  "active_session": "1주차",
+  "courses": {
+    "원가회계": {
+      "sessions": [
+        "1주차",
+        "2주차",
+        "3주차"
+      ],
+      "opinions": [],
+      "quizzes": []
+    },
+    "회계감사": {
+      "sessions": [
+        "1주차",
+        "2주차",
+        "3주차"
+      ],
+      "opinions": [],
+      "quizzes": []
+    },
+    "캡스톤디자인(ESG공시)": {
+      "sessions": [
+        "1주차",
+        "2주차",
+        "3주차"
+      ],
+      "opinions": [],
+      "quizzes": []
+    }
+  }
+}

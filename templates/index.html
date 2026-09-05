@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>강의 인터랙션 & AI 튜터 시스템</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <header class="app-header">
+    <div class="logo-area">
+      <div class="logo-icon">🎓</div>
+      <div class="logo-text">
+        <h1>스마트 강의 인터랙션 플랫폼</h1>
+        <span>원가회계 · 회계감사 · ESG 공시 특화</span>
+      </div>
+    </div>
+    <div class="header-status">
+      <span class="status-badge online">수업 세션 활성화</span>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="gateway-hero">
+      <h2>실시간 소통과 AI 튜터가 함께하는 강의실</h2>
+      <p>수업 중 실시간으로 의견을 나누고, 회계 및 ESG 전문 AI 조교에게 언제든 질문하세요.</p>
+    </section>
+
+    <div class="gateway-cards">
+      <!-- 학생 입장 카드 -->
+      <div class="gateway-card">
+        <div class="gateway-icon">🎒</div>
+        <h3>학생으로 입장</h3>
+        <p>별도의 로그인 없이 익명으로 수업 피드백을 전달하고 실시간 퀴즈 및 전문 AI 조교와 대화할 수 있습니다.</p>
+        <a href="/student" class="btn btn-primary btn-block">학생 모드로 시작하기 &rarr;</a>
+      </div>
+
+      <!-- 교수 입장 카드 -->
+      <div class="gateway-card">
+        <div class="gateway-icon">👨‍🏫</div>
+        <h3>교수로 입장</h3>
+        <p>학생들의 반응을 실시간 차트로 모니터링하고, AI 분석 기반 수업 개선안과 실시간 퀴즈를 출제합니다.</p>
+        <button id="openProfModalBtn" class="btn btn-secondary btn-block">교수 대시보드 입장 (PIN) &rarr;</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- 교수 PIN 입력 모달 -->
+  <div class="modal-overlay" id="profModal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>교수 인증</h3>
+        <button class="modal-close" id="closeProfModalBtn">&times;</button>
+      </div>
+      <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.25rem;">
+        교수자 전용 대시보드에 접근하려면 PIN 번호 4자리를 입력하세요.
+      </p>
+      <input type="password" id="pinInput" class="pin-input" maxlength="6" placeholder="••••" autofocus>
+      <div class="error-msg" id="pinError">PIN 번호가 일치하지 않습니다.</div>
+      <button id="submitPinBtn" class="btn btn-primary btn-block">입장하기</button>
+    </div>
+  </div>
+
+  <script>
+    const modal = document.getElementById('profModal');
+    const openBtn = document.getElementById('openProfModalBtn');
+    const closeBtn = document.getElementById('closeProfModalBtn');
+    const pinInput = document.getElementById('pinInput');
+    const submitBtn = document.getElementById('submitPinBtn');
+    const pinError = document.getElementById('pinError');
+
+    openBtn.addEventListener('click', () => {
+      modal.classList.add('active');
+      pinInput.value = '';
+      pinError.style.display = 'none';
+      pinInput.focus();
+    });
+
+    closeBtn.addEventListener('click', () => {
+      modal.classList.remove('active');
+    });
+
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) modal.classList.remove('active');
+    });
+
+    async function handleLogin() {
+      const pin = pinInput.value.trim();
+      if (!pin) {
+        pinError.innerText = 'PIN 번호를 입력해주세요.';
+        pinError.style.display = 'block';
+        return;
+      }
+
+      try {
+        const res = await fetch('/login_professor', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin: pin })
+        });
+        const data = await res.json();
+        if (data.success) {
+          window.location.href = data.redirect || '/professor';
+        } else {
+          pinError.innerText = data.message || '인증에 실패했습니다.';
+          pinError.style.display = 'block';
+        }
+      } catch (err) {
+        pinError.innerText = '서버 통신 오류가 발생했습니다.';
+        pinError.style.display = 'block';
+      }
+    }
+
+    submitBtn.addEventListener('click', handleLogin);
+    pinInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') handleLogin();
+    });
+  </script>
+</body>
+</html>

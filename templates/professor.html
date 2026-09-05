@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>교수 모드 | 과목별 강의시간 분리 & 누적 AI 해석 대시보드</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body>
+
+  <!-- 메인 헤더 -->
+  <header class="app-header">
+    <div class="logo-area">
+      <div class="logo-icon">👨‍🏫</div>
+      <div class="logo-text">
+        <h1>교수자 강의 통제 & AI 종합 분석 대시보드</h1>
+        <span id="profHeaderSubtitle">원가회계 · 회계감사 · 캡스톤디자인(ESG공시)</span>
+      </div>
+    </div>
+    <div class="header-status">
+      <span class="status-badge online" id="profConnStatus">실시간 연결됨</span>
+      <button id="resetDataBtn" class="btn btn-outline" style="padding: 0.4rem 0.8rem; font-size: 0.85rem;">데이터 초기화</button>
+      <a href="/logout_professor" class="btn btn-secondary" style="padding: 0.4rem 0.8rem; font-size: 0.85rem;">로그아웃</a>
+    </div>
+  </header>
+
+  <!-- 과목 선택 및 강의시간(세션) 제어 바 -->
+  <div class="course-nav-bar">
+    <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+      <span style="font-size: 0.85rem; font-weight: 700; color: var(--text-muted);">강의 과목 선택:</span>
+      <div class="course-tabs" id="courseTabs">
+        <!-- JS에서 서버 등록 과목 목록 기반으로 동적 렌더링 -->
+      </div>
+      <div style="display: flex; gap: 0.4rem; align-items: center;">
+        <button id="renameCourseBtn" class="btn btn-outline" style="padding: 0.35rem 0.65rem; font-size: 0.8rem; font-weight: 600;" title="현재 선택된 과목명을 수정합니다">✏️ 과목명 수정</button>
+        <button id="addCourseBtn" class="btn btn-outline" style="padding: 0.35rem 0.65rem; font-size: 0.8rem; font-weight: 600; color: var(--primary); border-color: var(--primary);" title="새로운 과목을 추가합니다">+ 새 과목 추가</button>
+        <button id="deleteCourseBtn" class="btn btn-outline" style="padding: 0.35rem 0.65rem; font-size: 0.8rem; font-weight: 600; color: var(--danger); border-color: var(--danger);" title="현재 선택된 과목 삭제">🗑️ 과목 삭제</button>
+      </div>
+    </div>
+
+    <div class="session-controls">
+      <label for="sessionSelect" style="font-size: 0.85rem; font-weight: 700; color: var(--text-muted);">강의시간(주차):</label>
+      <select id="sessionSelect" class="session-select">
+        <option value="1주차">1주차</option>
+        <option value="2주차">2주차</option>
+        <option value="3주차">3주차</option>
+        <option value="전체">전체 (누적 합산)</option>
+      </select>
+      <button id="addSessionBtn" class="btn btn-outline" style="padding: 0.4rem 0.75rem; font-size: 0.85rem;">+ 새 차시 추가</button>
+      <button id="setActiveSessionBtn" class="btn btn-primary" style="padding: 0.4rem 0.75rem; font-size: 0.85rem;">현재 강의로 지정</button>
+    </div>
+  </div>
+
+  <main class="container">
+
+    <!-- 1. 최상단: 실시간 퀴즈 출제 및 응답 모니터링 -->
+    <div class="card" style="margin-bottom: 1.5rem;">
+      <h2 class="card-title">
+        <span>⚡</span> 실시간 퀴즈 출제 & 청중 응답 통계
+      </h2>
+      <p style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 1rem;">
+        접속 중인 학생들에게 실시간 퀴즈를 전송하고 학생들의 선택 결과를 실시간으로 확인하세요.
+      </p>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+        <!-- 퀴즈 작성 폼 -->
+        <div>
+          <div style="margin-bottom: 0.75rem;">
+            <label style="font-size: 0.85rem; font-weight: 600;">퀴즈 질문:</label>
+            <input type="text" id="quizQuestionInput" class="chat-input" style="width: 100%; margin-top: 4px;" placeholder="예: 손익분기점(BEP)을 구하는 공식은?">
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.75rem;">
+            <label style="font-size: 0.85rem; font-weight: 600;">선택지 (4지선다):</label>
+            <input type="text" id="opt0" class="chat-input" placeholder="보기 1" value="판매가격 - 단위당 변동원가">
+            <input type="text" id="opt1" class="chat-input" placeholder="보기 2" value="판매가격 + 단위당 고정원가">
+            <input type="text" id="opt2" class="chat-input" placeholder="보기 3" value="총매출액 - 총고정원가">
+            <input type="text" id="opt3" class="chat-input" placeholder="보기 4" value="단위당 변동원가 ÷ 공헌이익률">
+          </div>
+
+          <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem;">
+            <div>
+              <label style="font-size: 0.85rem; font-weight: 600;">정답 보기 선택:</label>
+              <select id="quizCorrectAnswer" class="chat-input" style="padding: 0.5rem; width: 100px;">
+                <option value="0">보기 1</option>
+                <option value="1">보기 2</option>
+                <option value="2">보기 3</option>
+                <option value="3">보기 4</option>
+              </select>
+            </div>
+            <div style="flex: 1;">
+              <label style="font-size: 0.85rem; font-weight: 600;">해설 (답변 제출 후 노출):</label>
+              <input type="text" id="quizExplanation" class="chat-input" style="width: 100%;" placeholder="단위당 공헌이익은 판매가격에서 단위당 변동원가를 차감한 값입니다.">
+            </div>
+          </div>
+
+          <button id="sendQuizBtn" class="btn btn-success btn-block" style="font-weight: 700; font-size: 0.95rem;">
+            ➕ [현재 차시]에 퀴즈 문제 추가 출제
+          </button>
+          <button id="cancel-quiz-btn" class="btn btn-block" style="background-color: #f1f5f9; color: #64748b; border: 1px solid var(--border); margin-top: 0.5rem; font-size: 0.85rem;">
+            현재 차시 전체 퀴즈 출제 취소
+          </button>
+        </div>
+
+        <!-- 출제된 퀴즈별 실시간 응답 통계 -->
+        <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem; display: flex; flex-direction: column;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+            <h4 style="font-size: 0.95rem; font-weight: 700; color: #1e293b; margin: 0;">
+              출제된 문제별 실시간 응답 현황
+            </h4>
+            <span id="quizSessionBadge" style="font-size: 0.8rem; background: #e0e7ff; color: #3730a3; padding: 2px 8px; border-radius: 4px; font-weight: 600;">
+              1주차
+            </span>
+          </div>
+
+          <!-- 문제 선택 탭 바 (문제 1, 문제 2...) -->
+          <div id="quizTabsBar" style="display: flex; gap: 0.4rem; overflow-x: auto; padding-bottom: 0.5rem; margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); min-height: 36px; align-items: center;">
+            <!-- JS에서 동적 주입 -->
+          </div>
+
+          <!-- 선택된 문제 요약 정보 -->
+          <div id="selectedQuizInfo" style="display: none; margin-bottom: 0.5rem; background: #ffffff; border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.75rem;">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem;">
+              <div style="flex: 1;">
+                <div id="selectedQuizTitle" style="font-size: 0.88rem; font-weight: 700; color: #0f172a; line-height: 1.3;"></div>
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+                  총 응답: <b id="quizResponseCount" style="color: var(--primary);">0</b>명 &nbsp;|&nbsp; 정답: <b id="selectedQuizAnswerBadge" style="color: #16a34a;">보기 1</b>
+                </div>
+              </div>
+              <button id="deleteSelectedQuizBtn" class="btn" style="background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; padding: 0.25rem 0.6rem; font-size: 0.75rem; white-space: nowrap;">
+                🗑️ 이 문제 삭제
+              </button>
+            </div>
+          </div>
+
+          <!-- 미출제 시 안내 문구 -->
+          <div id="noQuizPlaceholder" style="text-align: center; color: var(--text-muted); padding: 3rem 1rem; font-size: 0.9rem;">
+            현재 차시에 출제된 퀴즈가 없습니다.<br>왼쪽에서 문제를 작성하고 <b>[퀴즈 문제 추가 출제]</b>를 눌러주세요.
+          </div>
+
+          <!-- 실시간 차트 -->
+          <div class="chart-wrapper" id="quizChartWrapper" style="height: 190px; display: none;">
+            <canvas id="quizStatsChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. 중간: 뷰 모드 전환 탭 (1. 실시간 모니터링 / 2. 누적 분석 & 종합 해석) -->
+    <div class="view-mode-bar">
+      <div class="view-mode-tab active" id="tabLiveView">📡 실시간 강의 모니터링</div>
+      <div class="view-mode-tab" id="tabCumulativeView">📊 과목별 누적 분석 & AI 종합 해석</div>
+    </div>
+
+    <!-- ================= 1. 실시간 강의 모니터링 뷰 ================= -->
+    <div id="liveViewContainer">
+      
+      <!-- 상단 2열 그리드: 차트 통계 & 실시간 의견 스트림 -->
+      <div class="prof-grid">
+        <!-- 1. 학생 이해도/의견 분포 차트 -->
+        <div class="card">
+          <h2 class="card-title">
+            <span>📊</span> 실시간 수업 이해도 및 의견 분포
+            <span style="font-size: 0.85rem; font-weight: 500; margin-left: auto; color: var(--text-muted);">
+              [<span id="currentCourseDisplay">원가회계</span> | <span id="currentSessionDisplay">1주차</span>] 접수: <b id="totalOpinionsCount" style="color: var(--primary);">0</b>건
+            </span>
+          </h2>
+          <div class="chart-wrapper">
+            <canvas id="opinionsChart"></canvas>
+          </div>
+        </div>
+
+        <!-- 2. 최근 제출된 의견 실시간 피드 -->
+        <div class="card">
+          <h2 class="card-title">
+            <span>💬</span> 실시간 학생 피드백 피드 (최신순)
+          </h2>
+          <div class="recent-opinions-list" id="opinionsList">
+            <div style="text-align: center; color: var(--text-muted); padding: 2rem;">
+              학생들의 피드백이 수집되면 여기에 실시간으로 표시됩니다.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. 하단 섹션: 이번 차시 AI 피드백 분석 & 개선안 -->
+      <div class="card" style="margin-top: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+          <div>
+            <h2 class="card-title" style="margin-bottom: 0.25rem; border: none; padding: 0;">
+              <span>🤖</span> 현재 강의시간 피드백 AI 분석 & 퀴즈 추천
+            </h2>
+            <p style="font-size: 0.875rem; color: var(--text-muted);">
+              현재 선택된 강의시간(<span id="analysisTargetSession">1주차</span>)의 학생 피드백을 분석하여 수업 개선안과 맞춤 퀴즈를 생성합니다.
+            </p>
+          </div>
+          <button id="analyzeOpinionsBtn" class="btn btn-primary">
+            <span>✨</span> 현재 세션 피드백 AI 분석
+          </button>
+        </div>
+
+        <div class="analysis-card" id="analysisResultCard">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="font-size: 1.1rem; color: #3730a3; font-weight: 700;">
+              💡 이번 강의 개선 인사이트 리포트
+            </h3>
+            <button id="applySuggestedQuizBtn" class="btn btn-success" style="padding: 0.4rem 0.8rem; font-size: 0.85rem; display: none;">
+              추천 퀴즈 자동 입력 &rarr;
+            </button>
+          </div>
+          <div class="analysis-content" id="analysisContent">
+            분석 중입니다...
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ================= 2. 과목별 누적 분석 & 종합 해석 뷰 ================= -->
+    <div id="cumulativeViewContainer" class="cumulative-view-section">
+      
+      <!-- 누적 요약 통계 카드 그리드 -->
+      <div class="stat-cards-grid">
+        <div class="stat-card">
+          <div class="label">선택된 과목</div>
+          <div class="value" id="statCourseName" style="font-size: 1.4rem; color: var(--primary);">원가회계</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">학기 누적 총 피드백 건수</div>
+          <div class="value" id="statCumulativeTotal">0건</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">개설된 강의시간(주차) 수</div>
+          <div class="value" id="statSessionCount">3개 주차</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">누적 이해 완료율</div>
+          <div class="value" id="statComprehensionRate" style="color: var(--success);">-</div>
+        </div>
+      </div>
+
+      <!-- 주차별/강의시간별 이해도 추이 변화 그래프 -->
+      <div class="trend-chart-wrapper">
+        <h3 style="font-size: 1.15rem; font-weight: 700; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+          <span>📈</span> 주차별 이해도 및 피드백 변화 추이
+        </h3>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
+          강의 주차가 진행됨에 따라 학생들의 이해 완료, 어려움, 질문의 빈도 변화 흐름을 파악합니다.
+        </p>
+        <div class="chart-wrapper" style="height: 300px;">
+          <canvas id="cumulativeTrendChart"></canvas>
+        </div>
+      </div>
+
+      <!-- AI 누적 종합 진단 및 교육 해석 리포트 -->
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+          <div>
+            <h2 class="card-title" style="margin-bottom: 0.25rem; border: none; padding: 0;">
+              <span>🎓</span> AI 학기 누적 데이터 종합 진단 & 교육 해석 리포트
+            </h2>
+            <p style="font-size: 0.875rem; color: var(--text-muted);">
+              이번 학기 해당 과목의 전체 누적 피드백을 토대로 취약 단원, 성취도 변화 및 시험/강의 개선 전략을 해석합니다.
+            </p>
+          </div>
+          <button id="runCumulativeAnalysisBtn" class="btn btn-primary">
+            <span>✨</span> 과목 누적 데이터 AI 종합 진단 실행
+          </button>
+        </div>
+
+        <div class="cumulative-report-box" id="cumulativeReportBox" style="display: none;">
+          <h3 id="reportTitle">
+            <span>📑</span> 원가회계 학기 누적 AI 종합 진단서
+          </h3>
+          <div class="report-markdown" id="cumulativeReportText">
+            분석 리포트를 생성하고 있습니다...
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <script src="/static/professor.js?v=20260905_9"></script>
+</body>
+</html>

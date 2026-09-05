@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>학생 모드 | 과목별 실시간 소통 & AI 전담 조교</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body>
+
+  <header class="app-header">
+    <div class="logo-area">
+      <div class="logo-icon">🎒</div>
+      <div class="logo-text">
+        <h1>학생 참여 모드</h1>
+        <span id="studentHeaderSubtitle">원가회계 · 회계감사 · 캡스톤디자인(ESG공시)</span>
+      </div>
+    </div>
+    <div class="header-status">
+      <span class="status-badge online" id="connStatus">수업 연결 중...</span>
+      <a href="/" class="btn btn-outline" style="padding: 0.4rem 0.8rem; font-size: 0.85rem;">홈으로</a>
+    </div>
+  </header>
+
+  <!-- 학생 수강 과목 선택 바 -->
+  <div class="course-nav-bar" style="background: #f1f5f9; border-bottom: 1px solid var(--border); padding: 0.6rem 2rem;">
+    <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+      <span style="font-size: 0.85rem; font-weight: 700; color: #334155;">현재 참여 과목:</span>
+      <div class="course-tabs" id="studentCourseTabs">
+        <!-- JS에서 서버 등록 과목 목록 기반으로 동적 렌더링 -->
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #475569;">
+      <span>진행 차시:</span>
+      <select id="studentSessionSelect" class="session-select" style="padding: 0.25rem 0.6rem; font-size: 0.85rem;">
+        <option value="1주차">1주차</option>
+        <option value="2주차">2주차</option>
+        <option value="3주차">3주차</option>
+      </select>
+    </div>
+  </div>
+
+  <main class="container">
+    <div class="student-grid">
+
+      <!-- 왼쪽 컬럼: 수업 실시간 인터랙션 & 퀴즈 -->
+      <div class="student-left-col">
+        
+        <!-- 실시간 퀴즈 알림 카드 (교수가 출제 시 최상단에 활성화) -->
+        <div class="card quiz-box" id="quiz-container" style="display: none;">
+          <!-- JS에서 동적으로 내용 렌더링 -->
+        </div>
+
+        <!-- 실시간 이해도 및 의견 제출 카드 -->
+        <div class="card">
+          <h2 class="card-title">
+            <span>📢</span> [<span id="studentCardCourse">원가회계</span> - <span id="studentCardSession">1주차</span>] 피드백 제출 (익명)
+          </h2>
+          <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1rem;">
+            현재 수업 내용에 대한 이해도나 질문을 선택하세요. 교수님 화면에 실시간 및 학기 누적 데이터로 집계됩니다.
+          </p>
+
+          <!-- 4가지 반응 선택 버튼 -->
+          <div class="reaction-grid">
+            <button type="button" class="reaction-btn selected" data-cat="이해 완료">
+              <span class="emoji">💡</span>
+              <span class="label">이해 완료</span>
+            </button>
+            <button type="button" class="reaction-btn" data-cat="조금 어려움">
+              <span class="emoji">🤔</span>
+              <span class="label">조금 어려움</span>
+            </button>
+            <button type="button" class="reaction-btn" data-cat="질문 있음">
+              <span class="emoji">🙋‍♂️</span>
+              <span class="label">질문 있음</span>
+            </button>
+            <button type="button" class="reaction-btn" data-cat="예제 필요">
+              <span class="emoji">📝</span>
+              <span class="label">예제 필요</span>
+            </button>
+          </div>
+
+          <!-- 구체적 의견/질문 입력 텍스트영역 -->
+          <textarea id="opinionText" class="textarea-custom" placeholder="교수님께 전하고 싶은 구체적인 질문이나 의견을 적어주세요 (선택사항)"></textarea>
+
+          <button id="submitOpinionBtn" class="btn btn-primary btn-block">
+            익명으로 피드백 전송하기
+          </button>
+          <div id="submitNotice" style="display:none; color: var(--success); font-size: 0.85rem; margin-top: 0.5rem; text-align: center; font-weight: 600;">
+            ✓ 의견이 성공적으로 전달되었습니다!
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 오른쪽 컬럼: 과목 맞춤형 전문 AI 조교 챗봇 -->
+      <div class="card chat-container">
+        <h2 class="card-title">
+          <span>🤖</span> AI 학습 조교 (<span id="chatCourseTitle" style="color: var(--primary);">원가회계</span> 특화)
+        </h2>
+
+        <!-- 추천 질문 태그 버튼 (과목별 동적 변경) -->
+        <div class="chat-badge-tags" id="chatTagsContainer">
+          <!-- JS에서 동적 주입 -->
+        </div>
+
+        <!-- 챗 대화 내역 창 -->
+        <div class="chat-history" id="chatHistory">
+          <div class="message-bubble bot" id="welcomeBotBubble">
+            <div class="bot-header">🎓 AI 전담 조교</div>
+            안녕하세요! <b>원가회계</b> 전문 대학 수업 조교입니다. 😊<br>
+            수업 중 이해가 잘 안 되거나 개념/공식 질문이 있다면 언제든 편하게 물어보세요!
+          </div>
+        </div>
+
+        <!-- 챗 입력 바 -->
+        <div class="chat-input-bar">
+          <input type="text" id="chatInput" class="chat-input" placeholder="질문 내용을 입력하세요...">
+          <button id="sendChatBtn" class="btn btn-primary" style="padding: 0 1.25rem;">전송</button>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <script src="/static/student.js?v=20260905_8"></script>
+</body>
+</html>
