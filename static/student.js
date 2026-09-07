@@ -275,10 +275,11 @@ document.addEventListener('DOMContentLoaded', () => {
     return quiz.id || `${quiz.course || ''}__${quiz.session || ''}__${quiz.question || ''}`;
   }
 
-  // 현재 학생이 선택하여 보고 있는 [과목]과 [차시]에 일치하는 퀴즈 목록 필터링
+  // 현재 학생이 선택하여 보고 있는 [과목]과 [차시]에 일치하는 퀴즈 목록 필터링 (미공개/임시저장 제외)
   function getMatchingQuizzesForCurrentView() {
     return activeQuizzes.filter(q => {
       if (!q || !q.question) return false;
+      if (q.is_published === false) return false; // 임시 저장된 퀴즈는 학생에게 비노출
       const qCourse = (q.course || '').trim();
       const qSession = (q.session || '').trim();
       const currCourse = (selectedCourse || '').trim();
@@ -416,18 +417,18 @@ document.addEventListener('DOMContentLoaded', () => {
     updateQuizDisplay(false);
   }
 
-  // 소켓 이벤트: 활성 퀴즈 전체 갱신
+  // 소켓 이벤트: 활성 퀴즈 전체 갱신 (공개된 퀴즈만 보관)
   socket.on('active_quizzes_updated', (data) => {
     console.log('[Student] active_quizzes_updated:', data);
     if (!data) return;
-    activeQuizzes = data.active_quizzes || [];
+    activeQuizzes = (data.active_quizzes || []).filter(q => q.is_published !== false);
     updateQuizDisplay(false);
   });
 
   // 소켓 이벤트: 신규 퀴즈 수신
   socket.on('quiz_added', (quiz) => {
     console.log('[Student] quiz_added:', quiz);
-    if (!quiz) return;
+    if (!quiz || quiz.is_published === false) return;
     const exists = activeQuizzes.find(q => getQuizId(q) === getQuizId(quiz));
     if (!exists) activeQuizzes.push(quiz);
     const matches = getMatchingQuizzesForCurrentView().some(q => getQuizId(q) === getQuizId(quiz));
@@ -442,10 +443,18 @@ document.addEventListener('DOMContentLoaded', () => {
     updateQuizDisplay(false);
   });
 
+  // 소켓 이벤트: 퀴즈 비공개 전환 수신
+  socket.on('quiz_unpublished', (data) => {
+    console.log('[Student] quiz_unpublished:', data);
+    if (!data || !data.quiz_id) return;
+    activeQuizzes = activeQuizzes.filter(q => q.id !== data.quiz_id);
+    updateQuizDisplay(false);
+  });
+
   // 레거시 이벤트 호환 (send_quiz & receive_quiz)
   socket.on('send_quiz', (quiz) => {
     console.log('[Student] send_quiz received:', quiz);
-    if (!quiz) return;
+    if (!quiz || quiz.is_published === false) return;
     const exists = activeQuizzes.find(q => getQuizId(q) === getQuizId(quiz));
     if (!exists) activeQuizzes.push(quiz);
     const matches = getMatchingQuizzesForCurrentView().length > 0;
@@ -454,7 +463,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   socket.on('receive_quiz', (quiz) => {
     console.log('[Student] receive_quiz received:', quiz);
-    if (!quiz) return;
+    if (!quiz || quiz.is_published === false) return;
     const exists = activeQuizzes.find(q => getQuizId(q) === getQuizId(quiz));
     if (!exists) activeQuizzes.push(quiz);
     const matches = getMatchingQuizzesForCurrentView().length > 0;
@@ -481,7 +490,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await fetch('/api/current_quiz?_t=' + Date.now());
       if (!res.ok) return;
       const data = await res.json();
-      activeQuizzes = data.active_quizzes || (data.active_quiz ? [data.active_quiz] : []);
+      activeQuizzes = (data.active_quizzes || (data.active_quiz ? [data.active_quiz] : [])).filter(q => q.is_published !== false);
       updateQuizDisplay(false);
     } catch (err) {
       // 백그라운드 동기화 오류는 조용히 무시

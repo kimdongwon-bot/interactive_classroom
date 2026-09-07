@@ -81,6 +81,79 @@ active_quiz = None
 active_quizzes = []  # list of quiz dicts
 quiz_answers_by_id = {}  # quiz_id -> list of selected_options
 
+def sync_quizzes_from_storage():
+    """서버 시작 시 또는 복구 시 영구 저장소에서 퀴즈 목록 동기화"""
+    global active_quizzes, active_quiz
+    try:
+        data = load_data()
+        loaded = []
+        for c, cdata in data.get("courses", {}).items():
+            for q in cdata.get("quizzes", []):
+                q.setdefault("course", c)
+                q.setdefault("is_published", False)
+                if not any(item.get("id") == q.get("id") for item in loaded):
+                    loaded.append(q)
+        active_quizzes = loaded
+        pub = [q for q in active_quizzes if q.get("is_published")]
+        active_quiz = pub[-1] if pub else None
+    except Exception as e:
+        print(f"퀴즈 로드 중 오류: {e}")
+
+def save_quiz_to_storage(quiz):
+    """퀴즈 객체를 history.json의 해당 과목 퀴즈 목록에 저장/갱신"""
+    try:
+        data = load_data()
+        course = quiz.get("course", "원가회계")
+        if course in data.get("courses", {}):
+            q_list = data["courses"][course].setdefault("quizzes", [])
+            idx = next((i for i, q in enumerate(q_list) if q.get("id") == quiz.get("id")), -1)
+            if idx >= 0:
+                q_list[idx] = quiz
+            else:
+                q_list.append(quiz)
+            save_data(data)
+    except Exception as e:
+        print(f"퀴즈 저장 오류: {e}")
+
+def remove_quiz_from_storage(quiz_id):
+    """특정 퀴즈 ID를 history.json에서 삭제"""
+    try:
+        data = load_data()
+        changed = False
+        for c, cdata in data.get("courses", {}).items():
+            before = len(cdata.get("quizzes", []))
+            cdata["quizzes"] = [q for q in cdata.get("quizzes", []) if q.get("id") != quiz_id]
+            if len(cdata["quizzes"]) != before:
+                changed = True
+        if changed:
+            save_data(data)
+    except Exception as e:
+        print(f"퀴즈 삭제 저장 오류: {e}")
+
+def remove_course_session_quizzes_from_storage(course=None, session=None):
+    """지정된 과목/세션의 퀴즈 전체를 history.json에서 삭제"""
+    try:
+        data = load_data()
+        changed = False
+        for c, cdata in data.get("courses", {}).items():
+            if course and c != course:
+                continue
+            if session:
+                before = len(cdata.get("quizzes", []))
+                cdata["quizzes"] = [q for q in cdata.get("quizzes", []) if q.get("session") != session]
+                if len(cdata["quizzes"]) != before:
+                    changed = True
+            else:
+                cdata["quizzes"] = []
+                changed = True
+        if changed:
+            save_data(data)
+    except Exception as e:
+        print(f"차시 퀴즈 일괄 삭제 저장 오류: {e}")
+
+# 초기 구동 시 영구 저장소의 퀴즈 불러오기
+sync_quizzes_from_storage()
+
 def get_quiz_stats_dict(quiz_id):
     """특정 퀴즈 ID의 응답 통계 반환"""
     quiz = next((q for q in active_quizzes if q.get("id") == quiz_id), None)
@@ -91,7 +164,8 @@ def get_quiz_stats_dict(quiz_id):
         "quiz_id": quiz_id,
         "total_responses": len(answers),
         "stats": stats,
-        "correct_index": quiz.get("answer") if quiz else None
+        "correct_index": quiz.get("answer") if quiz else None,
+        "is_published": quiz.get("is_published", False) if quiz else False
     }
 
 def get_all_quiz_stats():
@@ -175,22 +249,28 @@ def logout_professor():
 def api_get_courses():
     data = load_data()
     session_map = {c: data["courses"][c].get("sessions", []) for c in data["courses"]}
+    is_prof = session.get('is_professor', False)
+    filtered_quizzes = active_quizzes if is_prof else [q for q in active_quizzes if q.get("is_published", True)]
+    curr_quiz = active_quiz if (is_prof or (active_quiz and active_quiz.get("is_published", True))) else (filtered_quizzes[-1] if filtered_quizzes else None)
     return jsonify({
         "active_course": data.get("active_course", "원가회계"),
         "active_session": data.get("active_session", "1주차"),
         "courses": list(data["courses"].keys()),
         "session_map": session_map,
-        "active_quiz": active_quiz,
-        "active_quizzes": active_quizzes,
+        "active_quiz": curr_quiz,
+        "active_quizzes": filtered_quizzes,
         "quiz_stats": get_all_quiz_stats()
     })
 
 @app.route('/api/current_quiz', methods=['GET'])
 def api_get_current_quiz():
     data = load_data()
+    is_prof = session.get('is_professor', False)
+    filtered_quizzes = active_quizzes if is_prof else [q for q in active_quizzes if q.get("is_published", True)]
+    curr_quiz = active_quiz if (is_prof or (active_quiz and active_quiz.get("is_published", True))) else (filtered_quizzes[-1] if filtered_quizzes else None)
     return jsonify({
-        "active_quiz": active_quiz,
-        "active_quizzes": active_quizzes,
+        "active_quiz": curr_quiz,
+        "active_quizzes": filtered_quizzes,
         "quiz_stats": get_all_quiz_stats(),
         "active_course": data.get("active_course", "원가회계"),
         "active_session": data.get("active_session", "1주차")
@@ -324,7 +404,10 @@ def api_rename_course():
             data["active_course"] = new_name
             active_changed = True
 
-        # 활성 퀴즈의 과목명도 연동
+        # 활성 퀴즈들의 과목명도 연동
+        for q in active_quizzes:
+            if q.get("course") == old_name:
+                q["course"] = new_name
         if active_quiz and active_quiz.get("course") == old_name:
             active_quiz["course"] = new_name
 
@@ -471,13 +554,16 @@ def api_reset_opinions():
 @socketio.on('connect')
 def handle_connect():
     emit('update_graph', get_graph_data())
+    is_prof = session.get('is_professor', False)
+    quizzes_to_send = active_quizzes if is_prof else [q for q in active_quizzes if q.get("is_published", True)]
     emit('active_quizzes_updated', {
-        "active_quizzes": active_quizzes,
+        "active_quizzes": quizzes_to_send,
         "quiz_stats": get_all_quiz_stats()
     })
-    if active_quiz:
-        emit('receive_quiz', active_quiz)
-        emit('send_quiz', active_quiz)
+    curr = active_quiz if (is_prof or (active_quiz and active_quiz.get("is_published", True))) else (quizzes_to_send[-1] if quizzes_to_send else None)
+    if curr:
+        emit('receive_quiz', curr)
+        emit('send_quiz', curr)
 
 @socketio.on('submit_opinion')
 def handle_submit_opinion(data):
@@ -528,9 +614,10 @@ def handle_chat_message(data):
 
 @socketio.on('send_quiz')
 def handle_send_quiz(data):
-    """교수가 학생들에게 실시간 퀴즈 출제 (동일 차시 내 다중 출제 지원)"""
+    """교수가 학생들에게 실시간 퀴즈 출제 (즉시 공개 또는 임시 저장)"""
     global active_quiz, active_quizzes, quiz_answers_by_id
     quiz_id = data.get("id") or f"quiz_{int(datetime.datetime.now().timestamp()*1000)}_{uuid.uuid4().hex[:4]}"
+    is_pub = data.get("is_published", True)
     new_quiz = {
         "id": quiz_id,
         "course": data.get("course", "원가회계"),
@@ -539,6 +626,7 @@ def handle_send_quiz(data):
         "options": data.get("options", []),
         "answer": data.get("answer", 0),
         "explanation": data.get("explanation", ""),
+        "is_published": is_pub,
         "created_at": datetime.datetime.now().strftime("%H:%M:%S")
     }
 
@@ -547,13 +635,121 @@ def handle_send_quiz(data):
         active_quizzes[existing_idx] = new_quiz
     else:
         active_quizzes.append(new_quiz)
-        quiz_answers_by_id[quiz_id] = []
+        quiz_answers_by_id.setdefault(quiz_id, [])
 
-    active_quiz = active_quizzes[-1]
+    if is_pub:
+        active_quiz = new_quiz
 
-    emit('quiz_added', new_quiz, broadcast=True)
-    emit('receive_quiz', new_quiz, broadcast=True)
-    emit('send_quiz', new_quiz, broadcast=True)
+    save_quiz_to_storage(new_quiz)
+
+    if is_pub:
+        emit('quiz_added', new_quiz, broadcast=True)
+        emit('receive_quiz', new_quiz, broadcast=True)
+        emit('send_quiz', new_quiz, broadcast=True)
+
+    emit('active_quizzes_updated', {
+        "active_quizzes": active_quizzes,
+        "quiz_stats": get_all_quiz_stats()
+    }, broadcast=True)
+
+@socketio.on('save_draft_quiz')
+def handle_save_draft_quiz(data):
+    """교수가 문제를 학생에게 공개하지 않고 임시 저장"""
+    global active_quizzes, quiz_answers_by_id
+    quiz_id = data.get("id") or f"quiz_{int(datetime.datetime.now().timestamp()*1000)}_{uuid.uuid4().hex[:4]}"
+    draft_quiz = {
+        "id": quiz_id,
+        "course": data.get("course", "원가회계"),
+        "session": data.get("session", "1주차"),
+        "question": data.get("question", ""),
+        "options": data.get("options", []),
+        "answer": data.get("answer", 0),
+        "explanation": data.get("explanation", ""),
+        "is_published": False,
+        "created_at": datetime.datetime.now().strftime("%H:%M:%S")
+    }
+
+    existing_idx = next((i for i, q in enumerate(active_quizzes) if q.get("id") == quiz_id), -1)
+    if existing_idx >= 0:
+        active_quizzes[existing_idx] = draft_quiz
+    else:
+        active_quizzes.append(draft_quiz)
+        quiz_answers_by_id.setdefault(quiz_id, [])
+
+    save_quiz_to_storage(draft_quiz)
+
+    emit('draft_saved', draft_quiz)
+    emit('active_quizzes_updated', {
+        "active_quizzes": active_quizzes,
+        "quiz_stats": get_all_quiz_stats()
+    }, broadcast=True)
+
+@socketio.on('publish_quiz')
+def handle_publish_quiz(data):
+    """교수가 임시 저장된 퀴즈를 학생들에게 공개(출제)"""
+    global active_quiz, active_quizzes
+    quiz_id = data.get("quiz_id") if isinstance(data, dict) else str(data)
+    quiz = next((q for q in active_quizzes if q.get("id") == quiz_id), None)
+    if not quiz:
+        return
+
+    quiz["is_published"] = True
+    active_quiz = quiz
+    save_quiz_to_storage(quiz)
+
+    emit('quiz_published', quiz, broadcast=True)
+    emit('quiz_added', quiz, broadcast=True)
+    emit('receive_quiz', quiz, broadcast=True)
+    emit('send_quiz', quiz, broadcast=True)
+    emit('active_quizzes_updated', {
+        "active_quizzes": active_quizzes,
+        "quiz_stats": get_all_quiz_stats()
+    }, broadcast=True)
+
+@socketio.on('unpublish_quiz')
+def handle_unpublish_quiz(data):
+    """교수가 공개된 퀴즈를 다시 비공개(임시 저장)로 전환"""
+    global active_quiz, active_quizzes
+    quiz_id = data.get("quiz_id") if isinstance(data, dict) else str(data)
+    quiz = next((q for q in active_quizzes if q.get("id") == quiz_id), None)
+    if not quiz:
+        return
+
+    quiz["is_published"] = False
+    save_quiz_to_storage(quiz)
+
+    pub_left = [q for q in active_quizzes if q.get("is_published")]
+    active_quiz = pub_left[-1] if pub_left else None
+
+    emit('quiz_unpublished', {"quiz_id": quiz_id}, broadcast=True)
+    emit('quiz_deleted', {"quiz_id": quiz_id}, broadcast=True)
+    emit('active_quizzes_updated', {
+        "active_quizzes": active_quizzes,
+        "quiz_stats": get_all_quiz_stats()
+    }, broadcast=True)
+
+@socketio.on('update_quiz')
+def handle_update_quiz(data):
+    """교수가 퀴즈 내용(질문, 보기, 정답, 해설)을 수정"""
+    global active_quiz, active_quizzes
+    quiz_id = data.get("id") or data.get("quiz_id")
+    quiz = next((q for q in active_quizzes if q.get("id") == quiz_id), None)
+    if not quiz:
+        return
+
+    quiz["question"] = data.get("question", quiz.get("question", ""))
+    quiz["options"] = data.get("options", quiz.get("options", []))
+    quiz["answer"] = data.get("answer", quiz.get("answer", 0))
+    quiz["explanation"] = data.get("explanation", quiz.get("explanation", ""))
+    if "is_published" in data:
+        quiz["is_published"] = data["is_published"]
+
+    save_quiz_to_storage(quiz)
+
+    if quiz.get("is_published"):
+        active_quiz = quiz
+        emit('quiz_added', quiz, broadcast=True)
+
     emit('active_quizzes_updated', {
         "active_quizzes": active_quizzes,
         "quiz_stats": get_all_quiz_stats()
@@ -566,7 +762,9 @@ def handle_delete_quiz(data):
     quiz_id = data.get("quiz_id") if isinstance(data, dict) else str(data)
     active_quizzes = [q for q in active_quizzes if q.get("id") != quiz_id]
     quiz_answers_by_id.pop(quiz_id, None)
-    active_quiz = active_quizzes[-1] if active_quizzes else None
+    pub_left = [q for q in active_quizzes if q.get("is_published")]
+    active_quiz = pub_left[-1] if pub_left else None
+    remove_quiz_from_storage(quiz_id)
 
     emit('quiz_deleted', {"quiz_id": quiz_id}, broadcast=True)
     emit('active_quizzes_updated', {
@@ -587,11 +785,14 @@ def handle_cancel_quiz(data=None):
         active_quizzes = [q for q in active_quizzes if not (q.get("course") == target_course and q.get("session") == target_session)]
         for qid in removed_ids:
             quiz_answers_by_id.pop(qid, None)
+        remove_course_session_quizzes_from_storage(target_course, target_session)
     else:
         active_quizzes = []
         quiz_answers_by_id = {}
+        remove_course_session_quizzes_from_storage()
 
-    active_quiz = active_quizzes[-1] if active_quizzes else None
+    pub_left = [q for q in active_quizzes if q.get("is_published")]
+    active_quiz = pub_left[-1] if pub_left else None
     emit('clear_quiz', {"course": target_course, "session": target_session}, broadcast=True)
     emit('active_quizzes_updated', {
         "active_quizzes": active_quizzes,

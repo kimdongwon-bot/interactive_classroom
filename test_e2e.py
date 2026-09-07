@@ -470,6 +470,92 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
         prof_socket.disconnect()
         student_socket.disconnect()
 
+    def test_10_quiz_draft_and_stepwise_publishing(self):
+        print("\n--- [Test 10] 문제 임시 저장 및 단계별 학생 공개 기능 검증 ---")
+        prof_socket = socketio.test_client(self.app)
+        student_socket = socketio.test_client(self.app)
+
+        # 1. 교수가 문제 2건(A, B)을 임시 저장 (save_draft_quiz)
+        draft_a = {
+            "id": "draft_quiz_A",
+            "course": "원가회계",
+            "session": "1주차",
+            "question": "임시 문제 A: 변동원가의 특징은?",
+            "options": ["조업도에 비례", "조업도와 무관", "항상 일정", "0이다"],
+            "answer": 0,
+            "explanation": "변동원가는 조업도에 비례하여 발생합니다."
+        }
+        draft_b = {
+            "id": "draft_quiz_B",
+            "course": "원가회계",
+            "session": "1주차",
+            "question": "임시 문제 B: 고정원가의 특징은?",
+            "options": ["조업도와 무관하게 일정", "조업도에 비례", "단위당 일정", "알수없음"],
+            "answer": 0,
+            "explanation": "고정원가는 관련범위 내에서 총액이 일정합니다."
+        }
+        prof_socket.emit('save_draft_quiz', draft_a)
+        prof_socket.emit('save_draft_quiz', draft_b)
+
+        # 학생 소켓이 receive_quiz 또는 send_quiz 이벤트를 받지 않았는지 검증
+        student_received = student_socket.get_received()
+        quiz_events = [e for e in student_received if e['name'] in ('send_quiz', 'receive_quiz', 'quiz_added')]
+        self.assertEqual(len(quiz_events), 0, "임시 저장된 문제는 학생에게 공개 이벤트가 발생하지 않아야 합니다.")
+
+        # 학생 시점에서 /api/current_quiz 조회 시 0건이어야 함
+        res_student = self.client.get('/api/current_quiz')
+        data_student = json.loads(res_student.data)
+        self.assertEqual(len(data_student.get('active_quizzes', [])), 0, "학생에게는 임시 저장된 퀴즈가 노출되지 않아야 합니다.")
+        print("  ✓ 문제 2건 임시 저장 -> 학생에게 미공개 및 격리 검증 완료")
+
+        # 교수 세션으로 /api/current_quiz 조회 시 2건 모두 조회되어야 함
+        with self.client.session_transaction() as sess:
+            sess['is_professor'] = True
+        res_prof = self.client.get('/api/current_quiz')
+        data_prof = json.loads(res_prof.data)
+        self.assertEqual(len(data_prof.get('active_quizzes', [])), 2, "교수에게는 임시 저장된 퀴즈 2건이 모두 보여야 합니다.")
+        print("  ✓ 교수 권한 조회 -> 임시 저장 퀴즈 2건 정상 보관 확인")
+
+        # 2. 문제 A만 학생에게 공개 (publish_quiz)
+        prof_socket.emit('publish_quiz', {'quiz_id': 'draft_quiz_A'})
+
+        # 학생 소켓이 quiz_published 또는 quiz_added 이벤트 수신 확인
+        student_received_after_pub = student_socket.get_received()
+        pub_events = [e for e in student_received_after_pub if e['name'] in ('quiz_published', 'quiz_added')]
+        self.assertTrue(len(pub_events) > 0, "학생에게 공개 이벤트가 전파되어야 합니다.")
+        self.assertEqual(pub_events[0]['args'][0]['id'], 'draft_quiz_A')
+
+        # 학생 시점에서 /api/current_quiz 조회 시 문제 A만 1건 노출
+        with self.client.session_transaction() as sess:
+            sess['is_professor'] = False
+        res_student2 = self.client.get('/api/current_quiz')
+        data_student2 = json.loads(res_student2.data)
+        quizzes_student2 = data_student2.get('active_quizzes', [])
+        self.assertEqual(len(quizzes_student2), 1)
+        self.assertEqual(quizzes_student2[0]['id'], 'draft_quiz_A')
+        print("  ✓ 문제 A 개별 공개 -> 학생 화면에 문제 A만 1건 실시간 출제 확인")
+
+        # 3. 문제 B도 공개 (publish_quiz)
+        prof_socket.emit('publish_quiz', {'quiz_id': 'draft_quiz_B'})
+        res_student3 = self.client.get('/api/current_quiz')
+        data_student3 = json.loads(res_student3.data)
+        self.assertEqual(len(data_student3.get('active_quizzes', [])), 2)
+        print("  ✓ 문제 B 추가 공개 -> 학생 화면에 문제 A, B 총 2건 모두 출제 확인")
+
+        # 4. 문제 B 비공개 전환 (unpublish_quiz)
+        prof_socket.emit('unpublish_quiz', {'quiz_id': 'draft_quiz_B'})
+        res_student4 = self.client.get('/api/current_quiz')
+        data_student4 = json.loads(res_student4.data)
+        quizzes_student4 = data_student4.get('active_quizzes', [])
+        self.assertEqual(len(quizzes_student4), 1)
+        self.assertEqual(quizzes_student4[0]['id'], 'draft_quiz_A')
+        print("  ✓ 문제 B 비공개 전환 -> 학생 화면에서 문제 B가 즉시 내려가고 문제 A만 유지됨 확인")
+
+        # 퀴즈 전체 정리
+        prof_socket.emit('cancel_quiz')
+        prof_socket.disconnect()
+        student_socket.disconnect()
+
 if __name__ == '__main__':
     unittest.main()
 

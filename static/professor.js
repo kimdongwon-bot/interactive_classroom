@@ -604,7 +604,9 @@ document.addEventListener('DOMContentLoaded', () => {
     alert('추천 퀴즈가 상단 퀴즈 출제 폼에 자동 입력되었습니다!');
   });
 
-  // 9. 다중 퀴즈 출제 및 문제별 실시간 응답 모니터링
+  // 9. 다중 퀴즈 출제, 임시 저장 및 문제별 실시간 응답 모니터링
+  let editingQuizId = null;
+
   function getCurrentSessionQuizzes() {
     return activeQuizzes.filter(q => {
       const cMatch = (!q.course || q.course === currentCourse);
@@ -624,11 +626,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const selectedInfo = document.getElementById('selectedQuizInfo');
     const chartWrapper = document.getElementById('quizChartWrapper');
     const noQuiz = document.getElementById('noQuizPlaceholder');
+    const draftNotice = document.getElementById('draftQuizNotice');
+    const publishBtn = document.getElementById('publishQuizBtn');
+    const unpublishBtn = document.getElementById('unpublishQuizBtn');
 
     if (sessionQuizzes.length === 0) {
       if (tabsBar) tabsBar.innerHTML = '';
       if (selectedInfo) selectedInfo.style.display = 'none';
       if (chartWrapper) chartWrapper.style.display = 'none';
+      if (draftNotice) draftNotice.style.display = 'none';
       if (noQuiz) noQuiz.style.display = 'block';
       selectedQuizId = null;
       return;
@@ -636,14 +642,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (noQuiz) noQuiz.style.display = 'none';
     if (selectedInfo) selectedInfo.style.display = 'block';
-    if (chartWrapper) chartWrapper.style.display = 'block';
 
     // 선택된 퀴즈 ID가 유효하지 않으면 첫 번째 퀴즈 선택
     if (!selectedQuizId || !sessionQuizzes.find(q => q.id === selectedQuizId)) {
       selectedQuizId = sessionQuizzes[0].id;
     }
 
-    // 탭 바 렌더링
+    // 탭 바 렌더링 (임시 저장 / 공개 상태 뱃지 표시)
     if (tabsBar) {
       tabsBar.innerHTML = '';
       sessionQuizzes.forEach((q, idx) => {
@@ -652,9 +657,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const btn = document.createElement('button');
         btn.type = 'button';
         const isSelected = (q.id === selectedQuizId);
+        const isPub = (q.is_published === true);
         btn.className = `quiz-tab-btn ${isSelected ? 'active' : ''}`;
         btn.style.cssText = `padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer; transition: all 0.2s; border: 1px solid ${isSelected ? '#4f46e5' : '#cbd5e1'}; background: ${isSelected ? '#4f46e5' : '#ffffff'}; color: ${isSelected ? '#ffffff' : '#334155'}; white-space: nowrap;`;
-        btn.innerHTML = `문제 ${idx + 1} <span style="background:${isSelected ? 'rgba(255,255,255,0.25)' : '#f1f5f9'}; padding: 1px 5px; border-radius: 4px; font-size: 0.75rem;">${count}명</span>`;
+
+        const badgeHtml = isPub
+          ? `<span style="background:${isSelected ? 'rgba(255,255,255,0.3)' : '#dcfce7'}; color:${isSelected ? '#ffffff' : '#15803d'}; padding: 1px 5px; border-radius: 4px; font-size: 0.72rem; margin-left: 3px; font-weight: 700;">공개 ${count}명</span>`
+          : `<span style="background:${isSelected ? 'rgba(255,255,255,0.3)' : '#fef3c7'}; color:${isSelected ? '#ffffff' : '#b45309'}; padding: 1px 5px; border-radius: 4px; font-size: 0.72rem; margin-left: 3px; font-weight: 700;">🔒임시</span>`;
+
+        btn.innerHTML = `문제 ${idx + 1} ${badgeHtml}`;
         btn.addEventListener('click', () => {
           selectedQuizId = q.id;
           renderProfessorQuizDashboard();
@@ -663,9 +674,28 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
-    // 선택된 퀴즈 상세 및 차트 갱신
+    // 선택된 퀴즈 상세 갱신
     const currentQuiz = sessionQuizzes.find(q => q.id === selectedQuizId) || sessionQuizzes[0];
     const qIndex = sessionQuizzes.indexOf(currentQuiz) + 1;
+    const isCurrentPub = (currentQuiz.is_published === true);
+
+    const statusBadge = document.getElementById('selectedQuizStatusBadge');
+    if (statusBadge) {
+      if (isCurrentPub) {
+        statusBadge.innerText = '🟢 학생에게 공개 중';
+        statusBadge.style.background = '#dcfce7';
+        statusBadge.style.color = '#15803d';
+        statusBadge.style.border = '1px solid #bbf7d0';
+      } else {
+        statusBadge.innerText = '🔒 임시 저장 (미공개)';
+        statusBadge.style.background = '#fef3c7';
+        statusBadge.style.color = '#b45309';
+        statusBadge.style.border = '1px solid #fde68a';
+      }
+    }
+
+    if (publishBtn) publishBtn.style.display = isCurrentPub ? 'none' : 'inline-block';
+    if (unpublishBtn) unpublishBtn.style.display = isCurrentPub ? 'inline-block' : 'none';
 
     const titleEl = document.getElementById('selectedQuizTitle');
     if (titleEl) {
@@ -685,81 +715,206 @@ document.addEventListener('DOMContentLoaded', () => {
       answerBadge.innerText = `보기 ${ansIdx + 1}${ansText ? ' (' + ansText.substring(0, 15) + '...)' : ''}`;
     }
 
-    // 차트 데이터 갱신
-    if (typeof quizChart !== 'undefined' && quizChart.data) {
-      const opts = currentQuiz.options || ['보기 1', '보기 2', '보기 3', '보기 4'];
-      quizChart.data.labels = opts.map((opt, i) => {
-        const short = opt.length > 12 ? opt.substring(0, 12) + '…' : opt;
-        return `보기 ${i + 1}: ${short}`;
-      });
+    // 상태에 따른 차트 또는 임시저장 안내 분기
+    if (isCurrentPub) {
+      if (draftNotice) draftNotice.style.display = 'none';
+      if (chartWrapper) chartWrapper.style.display = 'block';
 
-      const sMap = currentStat.stats || {};
-      const ansIdx = parseInt(currentQuiz.answer, 10);
-      const dataVals = opts.map((_, i) => sMap[i] || 0);
-      const bgColors = opts.map((_, i) => i === ansIdx ? 'rgba(22, 163, 74, 0.85)' : 'rgba(99, 102, 241, 0.75)');
-      const borderColors = opts.map((_, i) => i === ansIdx ? '#16a34a' : '#4f46e5');
+      if (typeof quizChart !== 'undefined' && quizChart.data) {
+        const opts = currentQuiz.options || ['보기 1', '보기 2', '보기 3', '보기 4'];
+        quizChart.data.labels = opts.map((opt, i) => {
+          const short = opt.length > 12 ? opt.substring(0, 12) + '…' : opt;
+          return `보기 ${i + 1}: ${short}`;
+        });
 
-      quizChart.data.datasets[0].data = dataVals;
-      quizChart.data.datasets[0].backgroundColor = bgColors;
-      quizChart.data.datasets[0].borderColor = borderColors;
-      quizChart.update();
+        const sMap = currentStat.stats || {};
+        const ansIdx = parseInt(currentQuiz.answer, 10);
+        const dataVals = opts.map((_, i) => sMap[i] || 0);
+        const bgColors = opts.map((_, i) => i === ansIdx ? 'rgba(22, 163, 74, 0.85)' : 'rgba(99, 102, 241, 0.75)');
+        const borderColors = opts.map((_, i) => i === ansIdx ? '#16a34a' : '#4f46e5');
+
+        quizChart.data.datasets[0].data = dataVals;
+        quizChart.data.datasets[0].backgroundColor = bgColors;
+        quizChart.data.datasets[0].borderColor = borderColors;
+        quizChart.update();
+      }
+    } else {
+      if (draftNotice) draftNotice.style.display = 'block';
+      if (chartWrapper) chartWrapper.style.display = 'none';
     }
   }
 
-  // 문제 추가 출제 버튼
-  const sendQuizBtn = document.getElementById('sendQuizBtn');
-  if (sendQuizBtn) {
-    sendQuizBtn.addEventListener('click', () => {
-      const qInput = document.getElementById('quizQuestionInput');
-      const question = qInput.value.trim();
-      const opt0 = document.getElementById('opt0').value.trim();
-      const opt1 = document.getElementById('opt1').value.trim();
-      const opt2 = document.getElementById('opt2').value.trim();
-      const opt3 = document.getElementById('opt3').value.trim();
-      const answer = parseInt(document.getElementById('quizCorrectAnswer').value, 10);
-      const expInput = document.getElementById('quizExplanation');
-      const explanation = expInput.value.trim();
+  function getQuizFormData() {
+    const qInput = document.getElementById('quizQuestionInput');
+    const question = qInput.value.trim();
+    const opt0 = document.getElementById('opt0').value.trim();
+    const opt1 = document.getElementById('opt1').value.trim();
+    const opt2 = document.getElementById('opt2').value.trim();
+    const opt3 = document.getElementById('opt3').value.trim();
+    const answer = parseInt(document.getElementById('quizCorrectAnswer').value, 10);
+    const expInput = document.getElementById('quizExplanation');
+    const explanation = expInput.value.trim();
 
-      if (!question || !opt0 || !opt1) {
-        alert('퀴즈 질문과 최소 2개 이상의 보기를 입력해 주세요.');
-        return;
-      }
+    if (!question || !opt0 || !opt1) {
+      alert('퀴즈 질문과 최소 2개 이상의 보기를 입력해 주세요.');
+      return null;
+    }
 
-      socket.emit('send_quiz', {
-        course: currentCourse,
-        session: currentSession,
-        question: question,
-        options: [opt0, opt1, opt2, opt3],
-        answer: answer,
-        explanation: explanation
-      });
+    return {
+      id: editingQuizId || undefined,
+      course: currentCourse,
+      session: currentSession,
+      question: question,
+      options: [opt0, opt1, opt2, opt3],
+      answer: answer,
+      explanation: explanation
+    };
+  }
 
-      // 입력란 초기화하여 바로 다음 문제 입력 가능하게 지원
-      qInput.value = '';
-      expInput.value = '';
-      alert(`[${currentCourse} - ${currentSession}]에 새 퀴즈 문제가 추가 출제되었습니다!`);
+  function resetQuizForm() {
+    document.getElementById('quizQuestionInput').value = '';
+    document.getElementById('quizExplanation').value = '';
+    editingQuizId = null;
+    const banner = document.getElementById('editingQuizBanner');
+    if (banner) banner.style.display = 'none';
+  }
+
+  // 1) 문제 임시 저장 버튼 (미공개)
+  const saveDraftQuizBtn = document.getElementById('saveDraftQuizBtn');
+  if (saveDraftQuizBtn) {
+    saveDraftQuizBtn.addEventListener('click', () => {
+      const formData = getQuizFormData();
+      if (!formData) return;
+
+      socket.emit('save_draft_quiz', formData);
+      resetQuizForm();
+      alert(`[${currentCourse} - ${currentSession}] 문제가 [임시 저장]되었습니다!\n학생들에게는 아직 공개되지 않으며, 원하실 때 [학생에게 공개하기] 버튼을 눌러 출제할 수 있습니다.`);
     });
   }
 
-  // 개별 문제 삭제 버튼
+  // 2) 문제 즉시 출제 및 공개 버튼
+  const sendQuizBtn = document.getElementById('sendQuizBtn');
+  if (sendQuizBtn) {
+    sendQuizBtn.addEventListener('click', () => {
+      const formData = getQuizFormData();
+      if (!formData) return;
+
+      formData.is_published = true;
+      socket.emit('send_quiz', formData);
+      resetQuizForm();
+      alert(`[${currentCourse} - ${currentSession}]에 새 퀴즈 문제가 학생들에게 즉시 출제(공개)되었습니다!`);
+    });
+  }
+
+  // 3) 임시 저장 문제 -> 학생에게 공개(출제) 버튼
+  const publishQuizBtn = document.getElementById('publishQuizBtn');
+  if (publishQuizBtn) {
+    publishQuizBtn.addEventListener('click', () => {
+      if (!selectedQuizId) return;
+      socket.emit('publish_quiz', { quiz_id: selectedQuizId });
+      alert('선택한 문제가 학생들에게 실시간으로 공개(출제)되었습니다!');
+    });
+  }
+
+  // 4) 공개된 문제 -> 비공개(임시 저장)로 전환 버튼
+  const unpublishQuizBtn = document.getElementById('unpublishQuizBtn');
+  if (unpublishQuizBtn) {
+    unpublishQuizBtn.addEventListener('click', () => {
+      if (!selectedQuizId) return;
+      if (!confirm('이 문제를 비공개(임시 저장)로 전환하시겠습니까? 학생 화면에서 문제가 즉시 내려갑니다.')) return;
+      socket.emit('unpublish_quiz', { quiz_id: selectedQuizId });
+      alert('문제가 비공개(임시 저장)로 전환되었습니다.');
+    });
+  }
+
+  // 5) 선택된 문제 내용 수정 버튼
+  const editQuizBtn = document.getElementById('editSelectedQuizBtn');
+  if (editQuizBtn) {
+    editQuizBtn.addEventListener('click', () => {
+      const sessionQuizzes = getCurrentSessionQuizzes();
+      const targetQuiz = sessionQuizzes.find(q => q.id === selectedQuizId);
+      if (!targetQuiz) return;
+
+      document.getElementById('quizQuestionInput').value = targetQuiz.question || '';
+      if (targetQuiz.options && targetQuiz.options.length >= 4) {
+        document.getElementById('opt0').value = targetQuiz.options[0] || '';
+        document.getElementById('opt1').value = targetQuiz.options[1] || '';
+        document.getElementById('opt2').value = targetQuiz.options[2] || '';
+        document.getElementById('opt3').value = targetQuiz.options[3] || '';
+      }
+      if (targetQuiz.answer !== undefined) {
+        document.getElementById('quizCorrectAnswer').value = targetQuiz.answer;
+      }
+      document.getElementById('quizExplanation').value = targetQuiz.explanation || '';
+
+      editingQuizId = targetQuiz.id;
+      const banner = document.getElementById('editingQuizBanner');
+      if (banner) banner.style.display = 'flex';
+
+      const qIn = document.getElementById('quizQuestionInput');
+      if (qIn) qIn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }
+
+  // 수정 취소 버튼
+  const cancelEditBtn = document.getElementById('cancelEditQuizBtn');
+  if (cancelEditBtn) {
+    cancelEditBtn.addEventListener('click', () => {
+      resetQuizForm();
+    });
+  }
+
+  // 6) 개별 문제 삭제 버튼
   const deleteQuizBtn = document.getElementById('deleteSelectedQuizBtn');
   if (deleteQuizBtn) {
     deleteQuizBtn.addEventListener('click', () => {
       if (!selectedQuizId) return;
-      if (!confirm('현재 선택된 퀴즈 문제를 삭제하시겠습니까? 학생 화면에서도 즉시 제거됩니다.')) return;
+      if (!confirm('현재 선택된 퀴즈 문제를 삭제하시겠습니까?')) return;
       socket.emit('delete_quiz', { quiz_id: selectedQuizId });
     });
   }
 
-  // 현재 차시 전체 퀴즈 출제 취소 버튼
+  // 7) 현재 차시 전체 퀴즈 출제 취소 버튼
   const cancelBtn = document.getElementById('cancel-quiz-btn');
   if (cancelBtn) {
     cancelBtn.addEventListener('click', () => {
-      if (!confirm(`[${currentCourse} - ${currentSession}]의 모든 출제 문제를 취소하시겠습니까?`)) return;
+      if (!confirm(`[${currentCourse} - ${currentSession}]의 모든 문제를 삭제/정리하시겠습니까?`)) return;
       socket.emit('cancel_quiz', { course: currentCourse, session: currentSession });
       alert(`[${currentCourse} - ${currentSession}] 퀴즈가 취소되었습니다.`);
     });
   }
+
+  // 소켓 이벤트: 임시 저장 완료 수신
+  socket.on('draft_saved', (quiz) => {
+    console.log('[Professor] draft_saved:', quiz);
+    if (!quiz) return;
+    const exists = activeQuizzes.find(q => q.id === quiz.id);
+    if (exists) {
+      Object.assign(exists, quiz);
+    } else {
+      activeQuizzes.push(quiz);
+    }
+    selectedQuizId = quiz.id;
+    renderProfessorQuizDashboard();
+  });
+
+  // 소켓 이벤트: 퀴즈 공개 상태 수신
+  socket.on('quiz_published', (quiz) => {
+    console.log('[Professor] quiz_published:', quiz);
+    if (!quiz) return;
+    const item = activeQuizzes.find(q => q.id === quiz.id);
+    if (item) item.is_published = true;
+    renderProfessorQuizDashboard();
+  });
+
+  // 소켓 이벤트: 퀴즈 비공개 상태 수신
+  socket.on('quiz_unpublished', (data) => {
+    console.log('[Professor] quiz_unpublished:', data);
+    if (!data || !data.quiz_id) return;
+    const item = activeQuizzes.find(q => q.id === data.quiz_id);
+    if (item) item.is_published = false;
+    renderProfessorQuizDashboard();
+  });
 
   // 소켓 이벤트: 활성 퀴즈 전체 갱신
   socket.on('active_quizzes_updated', (data) => {
@@ -775,7 +930,11 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('[Professor] quiz_added:', quiz);
     if (!quiz) return;
     const exists = activeQuizzes.find(q => q.id === quiz.id);
-    if (!exists) activeQuizzes.push(quiz);
+    if (exists) {
+      Object.assign(exists, quiz);
+    } else {
+      activeQuizzes.push(quiz);
+    }
     selectedQuizId = quiz.id;
     renderProfessorQuizDashboard();
   });
