@@ -13,6 +13,7 @@ load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default-teaching-app-secret-key-2528')
+app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(days=30)
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', ping_timeout=60, ping_interval=25)
 
@@ -82,8 +83,8 @@ active_quizzes = []  # list of quiz dicts
 quiz_answers_by_id = {}  # quiz_id -> list of selected_options
 
 def sync_quizzes_from_storage():
-    """서버 시작 시 또는 복구 시 영구 저장소에서 퀴즈 목록 동기화"""
-    global active_quizzes, active_quiz
+    """서버 시작 시 또는 복구 시 영구 저장소에서 퀴즈 목록 및 응답 통계 동기화"""
+    global active_quizzes, active_quiz, quiz_answers_by_id
     try:
         data = load_data()
         loaded = []
@@ -91,6 +92,8 @@ def sync_quizzes_from_storage():
             for q in cdata.get("quizzes", []):
                 q.setdefault("course", c)
                 q.setdefault("is_published", False)
+                if "answers" in q:
+                    quiz_answers_by_id[q.get("id")] = list(q.get("answers", []))
                 if not any(item.get("id") == q.get("id") for item in loaded):
                     loaded.append(q)
         active_quizzes = loaded
@@ -223,6 +226,7 @@ def login_professor():
     entered_pin = str(req_data.get('pin', '')).strip()
 
     if entered_pin == PROFESSOR_PIN:
+        session.permanent = True
         session['is_professor'] = True
         return jsonify({"success": True, "redirect": url_for('professor')})
     else:
@@ -801,7 +805,7 @@ def handle_cancel_quiz(data=None):
 
 @socketio.on('submit_quiz_answer')
 def handle_submit_quiz_answer(data):
-    """학생의 퀴즈 답안 제출 및 문제별 통계 브로드캐스트"""
+    """학생의 퀴즈 답안 제출 및 문제별 통계 브로드캐스트 & 영구 저장"""
     global quiz_answers_by_id
     quiz_id = data.get("quiz_id")
     if not quiz_id and active_quizzes:
@@ -817,6 +821,18 @@ def handle_submit_quiz_answer(data):
     if quiz_id not in quiz_answers_by_id:
         quiz_answers_by_id[quiz_id] = []
     quiz_answers_by_id[quiz_id].append(selected)
+
+    # 영구 저장소의 퀴즈 데이터에도 답안 동기화
+    try:
+        storage = load_data()
+        for c, cdata in storage.get("courses", {}).items():
+            for q in cdata.get("quizzes", []):
+                if q.get("id") == quiz_id:
+                    q.setdefault("answers", []).append(selected)
+                    save_data(storage)
+                    break
+    except Exception as e:
+        print(f"답안 영구 저장 오류: {e}")
 
     stats_info = get_quiz_stats_dict(quiz_id)
     emit('update_quiz_stats', stats_info, broadcast=True)
