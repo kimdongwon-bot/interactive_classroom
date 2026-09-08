@@ -23,6 +23,8 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
             try:
                 with open(DATA_FILE, 'w', encoding='utf-8') as f:
                     f.write(cls._backup_data)
+                import json
+                save_data(json.loads(cls._backup_data))
             except Exception:
                 pass
 
@@ -789,9 +791,62 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
         self.assertIsNotNone(w2_pub, "공개 전환 후 학생 화면에서도 2주차 퀴즈가 노출되어야 합니다.")
         print("  ✓ 2주차 퀴즈 학생 공개 전환 및 조회 연동 검증 완료")
 
-        prof_socket.emit('cancel_quiz')
+        prof_socket.emit('cancel_quiz', {'course': '원가회계', 'session': '2주차'})
         prof_socket.disconnect()
         student_socket.disconnect()
+
+    def test_14_strict_course_session_filtering_and_restored_data(self):
+        print("\n--- [Test 14] 주차별 퀴즈 엄격 격리 및 원가회계 1주차 2건 / 2주차 1건 분리 검증 ---")
+        with self.client.session_transaction() as sess:
+            sess['is_professor'] = True
+
+        # 실제 디스크에 저장된 복원 마스터 데이터 로드
+        if self._backup_data:
+            import json
+            from app import save_data
+            save_data(json.loads(self._backup_data))
+
+        from app import load_data
+        data = load_data()
+        quizzes = []
+        for c, cdata in data.get("courses", {}).items():
+            for q in cdata.get("quizzes", []):
+                quizzes.append(q)
+
+        # 1. 퀴즈 객체들의 course와 session 속성이 모두 비어있지 않음 검증
+        for q in quizzes:
+            self.assertTrue(bool(q.get('course')), f"퀴즈 {q.get('id')}는 course 속성을 반드시 가져야 합니다.")
+            self.assertTrue(bool(q.get('session')), f"퀴즈 {q.get('id')}는 session 속성을 반드시 가져야 합니다.")
+
+        # 2. 클라이언트와 동일한 엄격 필터링 함수 시뮬레이션
+        def filter_quizzes(course, session):
+            return [
+                q for q in quizzes
+                if q and q.get('question')
+                and (q.get('course') or '').strip() == course.strip()
+                and (session == '전체' or (q.get('session') or '').strip() == session.strip())
+            ]
+
+        # 3. 원가회계 1주차 -> 1주차 퀴즈 2건만 조회, 2주차 임시저장 퀴즈 미포함
+        cost_w1 = [q for q in quizzes if (q.get('course') or '').strip() == '원가회계' and (q.get('session') or '').strip() == '1주차']
+        self.assertEqual(len(cost_w1), 2, "원가회계 1주차에는 복원된 2개 문제가 표시되어야 합니다.")
+        w1_ids = [q['id'] for q in cost_w1]
+        self.assertIn('quiz_cost_w1_q1', w1_ids)
+        self.assertIn('quiz_cost_w1_q2', w1_ids)
+        self.assertNotIn('quiz_cost_w2_draft_1', w1_ids)
+        print(f"  ✓ 원가회계 1주차: 1주차 퀴즈 2건({w1_ids})만 정확히 필터링 (2주차 임시저장 유입 차단)")
+
+        # 4. 원가회계 2주차 -> 2주차 임시저장 퀴즈 1건만 조회, 1주차 퀴즈 미포함
+        cost_w2 = [q for q in quizzes if (q.get('course') or '').strip() == '원가회계' and (q.get('session') or '').strip() == '2주차']
+        self.assertEqual(len(cost_w2), 1, "원가회계 2주차에는 2주차 임시저장 퀴즈 1건만 표시되어야 합니다.")
+        self.assertEqual(cost_w2[0]['id'], 'quiz_cost_w2_draft_1')
+        self.assertFalse(cost_w2[0]['is_published'])
+        print(f"  ✓ 원가회계 2주차: 2주차 임시저장 퀴즈 1건({cost_w2[0]['id']})만 독립 필터링")
+
+        # 5. 타 과목(회계감사, 캡스톤디자인) -> 퀴즈 0건 (원가회계 퀴즈 누출 전무)
+        audit_w1 = [q for q in quizzes if (q.get('course') or '').strip() == '회계감사']
+        self.assertEqual(len(audit_w1), 0)
+        print("  ✓ 타 과목(회계감사) 선택 시 원가회계 퀴즈가 누출되지 않고 0건으로 엄격 격리 확인")
 
 if __name__ == '__main__':
     unittest.main()

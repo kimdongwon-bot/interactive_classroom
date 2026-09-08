@@ -291,9 +291,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const qCourse = (q.course || '').trim();
       const qSession = (q.session || '').trim();
       const currCourse = (selectedCourse || '').trim();
-      const currSession = (selectedSession || '').trim();
-      const courseMatches = (!qCourse || qCourse === currCourse);
-      const sessionMatches = (!qSession || qSession === currSession);
+      if (!qCourse || !qSession) return false;
+      const courseMatches = (qCourse === currCourse);
+      const sessionMatches = (qSession === currSession);
       return courseMatches && sessionMatches;
     });
   }

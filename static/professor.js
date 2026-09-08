@@ -173,6 +173,7 @@ document.addEventListener('DOMContentLoaded', () => {
     currentCourse = e.target.getAttribute('data-course');
     const available = sessionMap[currentCourse] || ['1주차'];
     currentSession = available[0] || '1주차';
+    activeQuizFilter = 'ALL';
 
     updateSessionDropdown();
     fetchGraphData();
@@ -663,7 +664,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function fetchSessionReport() {
     if (!analysisCard || !analysisContent) return;
     try {
-      const res = await fetch(`/api/session_report?course=${encodeURIComponent(currentCourse)}&session=${encodeURIComponent(currentSession)}`);
+      const res = await fetch(`/api/session_report?course=${encodeURIComponent(currentCourse)}&session=${encodeURIComponent(currentSession)}&_t=${Date.now()}`);
       const data = await res.json();
       if (data.has_report && data.professor_report) {
         analysisCard.classList.add('active');
@@ -759,17 +760,18 @@ document.addEventListener('DOMContentLoaded', () => {
   function getCurrentSessionQuizzes() {
     return activeQuizzes.filter(q => {
       if (!q || !q.question) return false;
-      const qCourse = (q.course || '원가회계').trim();
-      const qSession = (q.session || '1주차').trim();
-      const cMatch = (!qCourse || qCourse === currentCourse);
-      const sMatch = (currentSession === '전체' || qSession === currentSession);
+      const qCourse = (q.course || '').trim();
+      const qSession = (q.session || '').trim();
+      if (!qCourse || !qSession) return false;
+      const cMatch = (qCourse === currentCourse.trim());
+      const sMatch = (currentSession === '전체' || qSession === currentSession.trim());
       return cMatch && sMatch;
     });
   }
 
   async function refreshQuizzesFromServer() {
     try {
-      const res = await fetch('/api/current_quiz');
+      const res = await fetch(`/api/current_quiz?_t=${Date.now()}`);
       const data = await res.json();
       if (data) {
         if (data.active_quizzes) activeQuizzes = data.active_quizzes;

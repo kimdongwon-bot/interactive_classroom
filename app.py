@@ -144,7 +144,11 @@ def sync_quizzes_from_storage():
         new_answers = {}
         for c, cdata in data.get("courses", {}).items():
             for q in cdata.get("quizzes", []):
-                q.setdefault("course", c)
+                q["course"] = c
+                if not q.get("session"):
+                    q["session"] = "1주차"
+                if "is_published" not in q:
+                    q["is_published"] = False
                 if "answers" in q:
                     new_answers[q.get("id")] = list(q.get("answers", []))
                 elif q.get("id") in quiz_answers_by_id:
@@ -162,7 +166,10 @@ def save_quiz_to_storage(quiz):
     """퀴즈 객체를 history.json의 해당 과목 퀴즈 목록에 저장/갱신"""
     try:
         data = load_data()
-        course = quiz.get("course", "원가회계")
+        course = quiz.get("course") or "원가회계"
+        quiz["course"] = course
+        if not quiz.get("session"):
+            quiz["session"] = "1주차"
         if course in data.get("courses", {}):
             q_list = data["courses"][course].setdefault("quizzes", [])
             idx = next((i for i, q in enumerate(q_list) if q.get("id") == quiz.get("id")), -1)
@@ -848,6 +855,7 @@ def api_reset_opinions():
 
 @socketio.on('connect')
 def handle_connect():
+    sync_quizzes_from_storage()
     emit('update_graph', get_graph_data())
     is_prof = session.get('is_professor', False)
     quizzes_to_send = active_quizzes if is_prof else [q for q in active_quizzes if q.get("is_published", True)]
