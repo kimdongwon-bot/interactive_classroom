@@ -47,74 +47,85 @@ def init_default_data():
         }
     }
 
-def load_data():
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR, exist_ok=True)
+# 인메모리 마스터 캐시 및 스레드 락 기반 안전 동기화
+server_data_cache = None
 
-    # DATA_FILE이 없거나 비어있는 경우, 백업 파일이 있으면 자동 복구
-    if (not os.path.exists(DATA_FILE) or os.path.getsize(DATA_FILE) == 0) and os.path.exists(BACKUP_FILE) and os.path.getsize(BACKUP_FILE) > 0:
-        try:
-            import shutil
-            shutil.copy2(BACKUP_FILE, DATA_FILE)
-            print("[*] history.json이 비어 있어 백업(history.json.bak)에서 자동 복구 완료.")
-        except Exception as e:
-            print(f"백업 자동 복구 실패: {e}")
-
-    if not os.path.exists(DATA_FILE):
-        data = init_default_data()
-        save_data(data)
-        return data
-
+def _persist_data_to_disk_unlocked(data):
+    """디스크에 원자적으로 안전하게 저장 및 백업 생성 (락 내부에서 호출)"""
     try:
-        with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            # 기본 과목 누락 방지: courses가 비어있는 경우에만 기본 과목 생성
-            if "courses" not in data or not data["courses"]:
-                data["courses"] = {
-                    c: {"sessions": ["1주차", "2주차", "3주차"], "opinions": [], "quizzes": []}
-                    for c in DEFAULT_COURSES
-                }
-            return data
-    except Exception as e:
-        print(f"데이터 파일 읽기 오류: {e}, 백업 파일에서 복구를 시도합니다.")
-        if os.path.exists(BACKUP_FILE) and os.path.getsize(BACKUP_FILE) > 0:
-            try:
-                with open(BACKUP_FILE, 'r', encoding='utf-8') as bf:
-                    data = json.load(bf)
-                    print("[*] 손상된 history.json을 history.json.bak에서 안전하게 복구했습니다.")
-                    save_data(data)
-                    return data
-            except Exception as be:
-                print(f"백업 파일 복구 실패: {be}")
-
-        data = init_default_data()
-        save_data(data)
-        return data
-
-def save_data(data):
-    with data_lock:
         if not os.path.exists(DATA_DIR):
             os.makedirs(DATA_DIR, exist_ok=True)
-        # 1. 기존 유효 파일이 있으면 자동 백업 생성 (history.json.bak)
+
+        # 1. 기존 유효 파일 백업 유지
         if os.path.exists(DATA_FILE) and os.path.getsize(DATA_FILE) > 0:
             try:
                 import shutil
                 shutil.copy2(DATA_FILE, BACKUP_FILE)
             except Exception as e:
-                print(f"백업 파일 생성 오류: {e}")
+                print(f"백업 복사 실패: {e}")
 
-        # 2. 임시 파일 기록 후 원자적 교체로 파일 손상 방지
+        # 2. 임시 파일로 먼저 쓴 뒤 os.replace로 원자적 교체 (동시 읽기 시 빈 파일/충돌 방지)
         temp_file = os.path.join(DATA_DIR, f"history.tmp.{uuid.uuid4().hex[:6]}")
+        with open(temp_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(temp_file, DATA_FILE)
+    except Exception as e:
+        print(f"디스크 원자적 저장 실패, 직접 쓰기 시도: {e}")
         try:
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            os.replace(temp_file, DATA_FILE)
-        except Exception:
             with open(DATA_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            if os.path.exists(temp_file):
-                try: os.remove(temp_file)
-                except: pass
+        except Exception as e2:
+            print(f"직접 저장 오류: {e2}")
+
+def _init_server_data_cache():
+    global server_data_cache
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR, exist_ok=True)
+
+    # 1. DATA_FILE 읽기 시도
+    if os.path.exists(DATA_FILE) and os.path.getsize(DATA_FILE) > 0:
+        try:
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if data and "courses" in data and data["courses"]:
+                    server_data_cache = data
+                    return
+        except Exception as e:
+            print(f"history.json 파싱 오류: {e}, 백업 복구 시도...")
+
+    # 2. BACKUP_FILE 읽기 시도
+    if os.path.exists(BACKUP_FILE) and os.path.getsize(BACKUP_FILE) > 0:
+        try:
+            with open(BACKUP_FILE, 'r', encoding='utf-8') as bf:
+                data = json.load(bf)
+                if data and "courses" in data and data["courses"]:
+                    print("[*] history.json.bak 백업에서 정상 복구 완료!")
+                    server_data_cache = data
+                    _persist_data_to_disk_unlocked(server_data_cache)
+                    return
+        except Exception as be:
+            print(f"history.json.bak 읽기 오류: {be}")
+
+    # 3. 기본값 초기화 (기존 파일이 없을 때만)
+    server_data_cache = init_default_data()
+    _persist_data_to_disk_unlocked(server_data_cache)
+
+def load_data():
+    """인메모리 캐시에서 최신 데이터를 안전하게 반환 (읽기 전용 복사본)"""
+    global server_data_cache
+    with data_lock:
+        if server_data_cache is None:
+            _init_server_data_cache()
+        import copy
+        return copy.deepcopy(server_data_cache)
+
+def save_data(data):
+    """전체 데이터 갱신 및 디스크 영구 저장 (기존 데이터 절대 유실 방지)"""
+    global server_data_cache
+    with data_lock:
+        server_data_cache = data
+        _persist_data_to_disk_unlocked(server_data_cache)
+    sync_quizzes_from_storage()
 
 # 활성 퀴즈 상태 (인메모리 다중 퀴즈 및 문제별 통계 지원)
 active_quiz = None
@@ -127,16 +138,18 @@ def sync_quizzes_from_storage():
     try:
         data = load_data()
         loaded = []
+        new_answers = {}
         for c, cdata in data.get("courses", {}).items():
             for q in cdata.get("quizzes", []):
                 q.setdefault("course", c)
-                if "is_published" not in q:
-                    q["is_published"] = True
                 if "answers" in q:
-                    quiz_answers_by_id[q.get("id")] = list(q.get("answers", []))
+                    new_answers[q.get("id")] = list(q.get("answers", []))
+                elif q.get("id") in quiz_answers_by_id:
+                    new_answers[q.get("id")] = quiz_answers_by_id[q.get("id")]
                 if not any(item.get("id") == q.get("id") for item in loaded):
                     loaded.append(q)
         active_quizzes = loaded
+        quiz_answers_by_id = new_answers
         pub = [q for q in active_quizzes if q.get("is_published")]
         active_quiz = pub[-1] if pub else None
     except Exception as e:
@@ -215,9 +228,7 @@ def get_all_quiz_stats():
     """모든 활성 퀴즈의 통계 맵 반환"""
     return {q.get("id"): get_quiz_stats_dict(q.get("id")) for q in active_quizzes if q.get("id")}
 
-def get_graph_data(target_course=None, target_session=None):
-    """지정된 과목 및 세션(강의시간)의 차트 데이터 및 누적 통계 반환"""
-    data = load_data()
+def _compute_graph_data_from_dict(data, target_course=None, target_session=None):
     course = target_course or data.get("active_course", "원가회계")
     session_name = target_session or data.get("active_session", "1주차")
 
@@ -253,6 +264,11 @@ def get_graph_data(target_course=None, target_session=None):
         "recent_opinions": filtered_opinions[-20:][::-1],
         "session_trend": session_trend
     }
+
+def get_graph_data(target_course=None, target_session=None):
+    """지정된 과목 및 세션(강의시간)의 차트 데이터 및 누적 통계 반환"""
+    data = load_data()
+    return _compute_graph_data_from_dict(data, target_course, target_session)
 
 # ================= HTTP 라우트 =================
 
@@ -611,34 +627,39 @@ def handle_connect():
 
 @socketio.on('submit_opinion')
 def handle_submit_opinion(data):
-    """학생의 의견/이해도 제출 -> 해당 과목 및 세션에 영구 누적 저장"""
-    storage = load_data()
+    """학생의 의견/이해도 제출 -> 해당 과목 및 세션에 영구 누적 저장 (스레드 락 기반 동시성 보장)"""
+    global server_data_cache
+    with data_lock:
+        if server_data_cache is None:
+            _init_server_data_cache()
 
-    course = data.get('course') or storage.get('active_course', '원가회계')
-    session_name = data.get('session') or storage.get('active_session', '1주차')
-    category = data.get('category', '이해 완료')
-    text = (data.get('text') or '').strip()
+        course = data.get('course') or server_data_cache.get('active_course', '원가회계')
+        session_name = data.get('session') or server_data_cache.get('active_session', '1주차')
+        category = data.get('category', '이해 완료')
+        text = (data.get('text') or '').strip()
 
-    if category not in CATEGORY_KEYS:
-        category = "이해 완료"
+        if category not in CATEGORY_KEYS:
+            category = "이해 완료"
 
-    if course not in storage["courses"]:
-        storage["courses"][course] = {"sessions": [session_name], "opinions": [], "quizzes": []}
+        if course not in server_data_cache["courses"]:
+            server_data_cache["courses"][course] = {"sessions": [session_name], "opinions": [], "quizzes": []}
 
-    course_obj = storage["courses"][course]
-    new_opinion = {
-        "id": len(course_obj.get("opinions", [])) + 1,
-        "course": course,
-        "session": session_name,
-        "category": category,
-        "text": text if text else f"[{category}] 피드백을 전달했습니다.",
-        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    course_obj.setdefault("opinions", []).append(new_opinion)
-    save_data(storage)
+        course_obj = server_data_cache["courses"][course]
+        new_opinion = {
+            "id": len(course_obj.get("opinions", [])) + 1,
+            "course": course,
+            "session": session_name,
+            "category": category,
+            "text": text if text else f"[{category}] 피드백을 전달했습니다.",
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        course_obj.setdefault("opinions", []).append(new_opinion)
+        _persist_data_to_disk_unlocked(server_data_cache)
+
+        graph_data = _compute_graph_data_from_dict(server_data_cache, course, session_name)
 
     # 갱신된 그래프 데이터를 브로드캐스트
-    emit('update_graph', get_graph_data(course, session_name), broadcast=True)
+    emit('update_graph', graph_data, broadcast=True)
     emit('opinion_submitted_ack', {"success": True, "id": new_opinion["id"]})
 
 @socketio.on('chat_message')
