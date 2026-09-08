@@ -995,6 +995,86 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
         student_socket.disconnect()
         prof_socket.disconnect()
 
+    def test_session_dropdown_and_filtering(self):
+        """Test 16: 주차 변경 드롭다운 동기화, 서버 사이드 쿼리 필터링 및 퀴즈 출제 검증"""
+        print("\n--- [Test 16] 주차 드롭다운 동기화, 서버 사이드 필터링 및 출제 검증 ---")
+
+        if self._backup_data:
+            import json
+            from app import save_data
+            save_data(json.loads(self._backup_data))
+
+        # 1. /api/courses 에서 active_session_map 반환 검증
+        res_courses = self.client.get('/api/courses')
+        data_courses = json.loads(res_courses.data)
+        self.assertIn('active_session_map', data_courses)
+        self.assertIn('원가회계', data_courses['active_session_map'])
+        print("  ✓ /api/courses 내 active_session_map 정상 포함 확인")
+
+        # 2. /api/current_quiz?course=...&session=... 서버 사이드 필터링 검증
+        # (1) 교수 권한으로 원가회계 1주차 조회 -> 1주차 퀴즈 2건만 조회됨 (2주차 draft 미포함)
+        with self.client.session_transaction() as sess:
+            sess['is_professor'] = True
+        res_w1 = self.client.get('/api/current_quiz?course=원가회계&session=1주차')
+        data_w1 = json.loads(res_w1.data)
+        quizzes_w1 = data_w1.get('active_quizzes', [])
+        self.assertEqual(len(quizzes_w1), 2)
+        for q in quizzes_w1:
+            self.assertEqual(q.get('session'), '1주차')
+            self.assertEqual(q.get('course'), '원가회계')
+
+        # (2) 교수 권한으로 원가회계 2주차 조회 -> 2주차 임시저장 퀴즈 1건만 조회됨
+        res_w2 = self.client.get('/api/current_quiz?course=원가회계&session=2주차')
+        data_w2 = json.loads(res_w2.data)
+        quizzes_w2 = data_w2.get('active_quizzes', [])
+        self.assertEqual(len(quizzes_w2), 1)
+        self.assertEqual(quizzes_w2[0].get('session'), '2주차')
+        self.assertEqual(quizzes_w2[0].get('id'), 'quiz_cost_w2_draft_1')
+
+        # (3) 학생 권한으로 원가회계 2주차 조회 -> 임시 저장이므로 0건 조회됨
+        with self.client.session_transaction() as sess:
+            sess['is_professor'] = False
+        res_w2_stud = self.client.get('/api/current_quiz?course=원가회계&session=2주차')
+        data_w2_stud = json.loads(res_w2_stud.data)
+        self.assertEqual(len(data_w2_stud.get('active_quizzes', [])), 0)
+
+        # (4) 다른 과목(회계감사) 1주차 조회 시 0건
+        res_audit = self.client.get('/api/current_quiz?course=회계감사&session=1주차')
+        data_audit = json.loads(res_audit.data)
+        self.assertEqual(len(data_audit.get('active_quizzes', [])), 0)
+        print("  ✓ /api/current_quiz?course=...&session=... 서버 사이드 과목/주차 필터링 정확도 검증 완료")
+
+        # 3. 퀴즈 출제/임시저장 시 주차(차시) 엄격 유효성 검사 (빈 값 또는 '전체' 차단)
+        prof_socket = self.get_professor_socket()
+
+        # (1) 주차가 '전체'로 들어온 경우 저장 거부 및 quiz_error 발행
+        prof_socket.emit('save_draft_quiz', {
+            'id': 'invalid_session_quiz',
+            'course': '원가회계',
+            'session': '전체',
+            'question': '잘못된 세션 퀴즈',
+            'options': ['1', '2', '3', '4'],
+            'answer': 0
+        })
+        err_events = [e for e in prof_socket.get_received() if e['name'] == 'quiz_error']
+        self.assertTrue(len(err_events) > 0, "session='전체'인 경우 quiz_error가 발행되어야 합니다.")
+
+        # 저장소 확인
+        storage_check = load_data()
+        self.assertIsNone(next((q for q in storage_check['courses']['원가회계'].get('quizzes', []) if q['id'] == 'invalid_session_quiz'), None))
+        print("  ✓ 주차='전체' 또는 미지정 시 퀴즈 출제/임시저장 엄격 거부(quiz_error) 검증 통과")
+
+        # 4. 기존 원가회계 1주차 퀴즈 학생 제출 답안 데이터(63건, 61건) 보존 최종 검증
+        q1 = next((q for q in storage_check['courses']['원가회계']['quizzes'] if q['id'] == 'quiz_cost_w1_q1'), None)
+        q2 = next((q for q in storage_check['courses']['원가회계']['quizzes'] if q['id'] == 'quiz_cost_w1_q2'), None)
+        self.assertIsNotNone(q1)
+        self.assertIsNotNone(q2)
+        self.assertEqual(len(q1.get('answers', [])), 63, "문제 1의 학생 답안 63건이 완벽히 보존되어야 합니다.")
+        self.assertEqual(len(q2.get('answers', [])), 61, "문제 2의 학생 답안 61건이 완벽히 보존되어야 합니다.")
+        print(f"  ✓ 기존 학생 답안 완벽 보존 확인 (문제 1: {len(q1['answers'])}건, 문제 2: {len(q2['answers'])}건)")
+
+        prof_socket.disconnect()
+
 if __name__ == '__main__':
     unittest.main()
 

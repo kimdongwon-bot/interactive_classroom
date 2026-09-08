@@ -83,11 +83,66 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // 2. 초기 과목 및 세션 데이터 로드
+  let activeSessionMap = {};
   const courseTabs = document.getElementById('courseTabs');
   const sessionSelect = document.getElementById('sessionSelect');
   const currentCourseDisplay = document.getElementById('currentCourseDisplay');
   const currentSessionDisplay = document.getElementById('currentSessionDisplay');
   const analysisTargetSession = document.getElementById('analysisTargetSession');
+
+  // 퀴즈 출제 폼 내 과목/주차 선택 셀렉터
+  const quizCourseSelect = document.getElementById('quizCourseSelect');
+  const quizSessionSelect = document.getElementById('quizSessionSelect');
+
+  function updateQuizFormSessionOptions(selectedCourseForQuiz, targetSession = null) {
+    if (!quizSessionSelect) return;
+    const sessions = sessionMap[selectedCourseForQuiz] || ['1주차', '2주차', '3주차'];
+    quizSessionSelect.innerHTML = '';
+    sessions.forEach(s => {
+      if (s === '전체') return;
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.innerText = s;
+      quizSessionSelect.appendChild(opt);
+    });
+
+    if (targetSession && sessions.includes(targetSession)) {
+      quizSessionSelect.value = targetSession;
+    } else if (currentSession !== '전체' && sessions.includes(currentSession)) {
+      quizSessionSelect.value = currentSession;
+    } else {
+      quizSessionSelect.value = sessions[0] || '1주차';
+    }
+  }
+
+  function syncQuizFormSelectors(targetCourse = null, targetSession = null) {
+    if (!quizCourseSelect || !quizSessionSelect) return;
+    const courses = Object.keys(sessionMap);
+    if (courses.length === 0) courses.push('원가회계');
+
+    quizCourseSelect.innerHTML = '';
+    courses.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c;
+      opt.innerText = c;
+      quizCourseSelect.appendChild(opt);
+    });
+
+    const activeC = targetCourse || currentCourse;
+    if (courses.includes(activeC)) {
+      quizCourseSelect.value = activeC;
+    } else {
+      quizCourseSelect.value = courses[0] || '원가회계';
+    }
+
+    updateQuizFormSessionOptions(quizCourseSelect.value, targetSession);
+  }
+
+  if (quizCourseSelect) {
+    quizCourseSelect.addEventListener('change', () => {
+      updateQuizFormSessionOptions(quizCourseSelect.value);
+    });
+  }
 
   function renderCourseTabs(courses, activeCourse) {
     if (!courses || courses.length === 0) courses = ['원가회계'];
@@ -116,8 +171,15 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await fetch('/api/courses');
       const data = await res.json();
       currentCourse = data.active_course || '원가회계';
-      currentSession = data.active_session || '1주차';
+      activeSessionMap = data.active_session_map || {};
       sessionMap = data.session_map || {};
+
+      const available = sessionMap[currentCourse] || ['1주차'];
+      currentSession = activeSessionMap[currentCourse] || data.active_session || available[0] || '1주차';
+      if (!available.includes(currentSession) && currentSession !== '전체') {
+        currentSession = available[0] || '1주차';
+      }
+
       activeQuizzes = data.active_quizzes || [];
       quizStats = data.quiz_stats || {};
 
@@ -156,9 +218,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (currentSession === '전체') allOpt.selected = true;
     sessionSelect.appendChild(allOpt);
 
+    // [단일 진실 공급원(SSOT) 동기화]
+    sessionSelect.value = currentSession;
+    if (sessionSelect.value !== currentSession) {
+      currentSession = sessions[0] || '1주차';
+      sessionSelect.value = currentSession;
+    }
+    currentSession = sessionSelect.value;
+
     currentCourseDisplay.innerText = currentCourse;
     currentSessionDisplay.innerText = currentSession;
     analysisTargetSession.innerText = currentSession;
+
+    syncQuizFormSelectors();
 
     if (typeof renderProfessorQuizDashboard === 'function') {
       renderProfessorQuizDashboard();
@@ -173,7 +245,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     currentCourse = e.target.getAttribute('data-course');
     const available = sessionMap[currentCourse] || ['1주차'];
-    currentSession = available[0] || '1주차';
+    const saved = activeSessionMap[currentCourse];
+    currentSession = (saved && available.includes(saved)) ? saved : (available[0] || '1주차');
     activeQuizFilter = 'ALL';
 
     updateSessionDropdown();
@@ -196,6 +269,7 @@ document.addEventListener('DOMContentLoaded', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ course: currentCourse, session: currentSession })
       });
+      activeSessionMap[currentCourse] = currentSession;
       console.log(`[Professor] Active course synced to [${currentCourse} - ${currentSession}]`);
     } catch (err) {
       console.warn('활성 수업 자동 동기화 오류:', err);
@@ -205,9 +279,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // 세션 드롭다운 변경 이벤트
   sessionSelect.addEventListener('change', async () => {
     currentSession = sessionSelect.value;
+    activeSessionMap[currentCourse] = currentSession;
     currentSessionDisplay.innerText = currentSession;
     analysisTargetSession.innerText = currentSession;
     activeQuizFilter = 'ALL';
+    syncQuizFormSelectors();
     fetchGraphData();
     if (typeof refreshQuizzesFromServer === 'function') {
       await refreshQuizzesFromServer();
@@ -772,7 +848,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function refreshQuizzesFromServer() {
     try {
-      const res = await fetch(`/api/current_quiz?_t=${Date.now()}`);
+      const qParams = new URLSearchParams({
+        _t: Date.now(),
+        course: currentCourse,
+        session: currentSession
+      });
+      const res = await fetch(`/api/current_quiz?${qParams.toString()}`);
       const data = await res.json();
       if (data) {
         if (data.active_quizzes) activeQuizzes = data.active_quizzes;
@@ -898,6 +979,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <div style="flex: 1; min-width: 200px;">
             <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px; flex-wrap: wrap;">
               <span style="background: #e0e7ff; color: #3730a3; padding: 2px 7px; border-radius: 4px; font-size: 0.78rem; font-weight: 700;">문제 ${globalIdx}</span>
+              <span style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; padding: 2px 7px; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">📌 ${escapeHtml(q.course || currentCourse)} · ${escapeHtml(q.session || currentSession)}</span>
               ${isPub
                 ? `<span style="background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; font-size: 0.75rem; font-weight: 700; padding: 2px 7px; border-radius: 4px;">🟢 공개 중</span>`
                 : `<span style="background: #fef3c7; color: #b45309; border: 1px solid #fde68a; font-size: 0.75rem; font-weight: 700; padding: 2px 7px; border-radius: 4px;">🔒 임시 저장 (미공개)</span>`
@@ -969,6 +1051,8 @@ document.addEventListener('DOMContentLoaded', () => {
           const banner = document.getElementById('editingQuizBanner');
           if (banner) banner.style.display = 'flex';
 
+          syncQuizFormSelectors(q.course || currentCourse, q.session || currentSession);
+
           const qIn = document.getElementById('quizQuestionInput');
           if (qIn) qIn.scrollIntoView({ behavior: 'smooth', block: 'center' });
         });
@@ -1037,15 +1121,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const expInput = document.getElementById('quizExplanation');
     const explanation = expInput.value.trim();
 
+    const targetCourse = (quizCourseSelect ? quizCourseSelect.value : currentCourse).trim();
+    const targetSession = (quizSessionSelect ? quizSessionSelect.value : currentSession).trim();
+
     if (!question || !opt0 || !opt1) {
       alert('퀴즈 질문과 최소 2개 이상의 보기를 입력해 주세요.');
       return null;
     }
 
+    if (!targetSession || targetSession === '전체') {
+      alert('출제할 주차(차시)를 정확히 선택해 주세요. (전체 합산 상태에서는 출제 또는 임시 저장을 할 수 없습니다)');
+      return null;
+    }
+
     return {
       id: editingQuizId || undefined,
-      course: currentCourse,
-      session: currentSession,
+      course: targetCourse || currentCourse,
+      session: targetSession,
       question: question,
       options: [opt0, opt1, opt2, opt3],
       answer: answer,
@@ -1059,6 +1151,7 @@ document.addEventListener('DOMContentLoaded', () => {
     editingQuizId = null;
     const banner = document.getElementById('editingQuizBanner');
     if (banner) banner.style.display = 'none';
+    syncQuizFormSelectors();
   }
 
   // 1) 문제 임시 저장 버튼 (미공개)
@@ -1068,9 +1161,19 @@ document.addEventListener('DOMContentLoaded', () => {
       const formData = getQuizFormData();
       if (!formData) return;
 
+      const targetC = formData.course;
+      const targetS = formData.session;
+
       socket.emit('save_draft_quiz', formData);
       resetQuizForm();
-      alert(`[${currentCourse} - ${currentSession}] 문제가 [임시 저장]되었습니다!\n학생들에게는 아직 공개되지 않으며, 원하실 때 [학생에게 공개하기] 버튼을 눌러 출제할 수 있습니다.`);
+      alert(`[${targetC} - ${targetS}] 문제가 [임시 저장]되었습니다!\n학생들에게는 아직 공개되지 않으며, 원하실 때 [학생에게 공개하기] 버튼을 눌러 출제할 수 있습니다.`);
+
+      if (targetC !== currentCourse || (currentSession !== '전체' && targetS !== currentSession)) {
+        currentCourse = targetC;
+        currentSession = targetS;
+        updateSessionDropdown();
+        refreshQuizzesFromServer();
+      }
     });
   }
 
@@ -1081,10 +1184,20 @@ document.addEventListener('DOMContentLoaded', () => {
       const formData = getQuizFormData();
       if (!formData) return;
 
+      const targetC = formData.course;
+      const targetS = formData.session;
+
       formData.is_published = true;
       socket.emit('send_quiz', formData);
       resetQuizForm();
-      alert(`[${currentCourse} - ${currentSession}]에 새 퀴즈 문제가 학생들에게 즉시 출제(공개)되었습니다!`);
+      alert(`[${targetC} - ${targetS}]에 새 퀴즈 문제가 학생들에게 즉시 출제(공개)되었습니다!`);
+
+      if (targetC !== currentCourse || (currentSession !== '전체' && targetS !== currentSession)) {
+        currentCourse = targetC;
+        currentSession = targetS;
+        updateSessionDropdown();
+        refreshQuizzesFromServer();
+      }
     });
   }
 
@@ -1117,6 +1230,11 @@ document.addEventListener('DOMContentLoaded', () => {
       activeQuizzes.push(quiz);
     }
     renderProfessorQuizDashboard();
+  });
+
+  // 소켓 이벤트: 퀴즈 출제/저장 오류 수신
+  socket.on('quiz_error', (data) => {
+    alert(data && data.message ? data.message : '퀴즈 처리 중 오류가 발생했습니다.');
   });
 
   // 소켓 이벤트: 퀴즈 공개 상태 수신

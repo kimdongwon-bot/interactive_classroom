@@ -76,10 +76,15 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  let activeSessionMap = {};
+
   async function loadCourses() {
     try {
       const res = await fetch('/api/courses');
       const data = await res.json();
+
+      activeSessionMap = data.active_session_map || {};
+      sessionMap = data.session_map || {};
 
       // 학생이 이전에 직접 선택한 과목이 있다면 우선 유지
       const savedCourse = localStorage.getItem('student_selected_course');
@@ -90,13 +95,17 @@ document.addEventListener('DOMContentLoaded', () => {
         selectedCourse = data.active_course || (data.courses && data.courses[0]) || '원가회계';
       }
 
-      selectedSession = data.active_session || '1주차';
-      sessionMap = data.session_map || {};
+      const available = sessionMap[selectedCourse] || ['1주차'];
+      selectedSession = activeSessionMap[selectedCourse] || data.active_session || available[0] || '1주차';
+      if (!available.includes(selectedSession)) {
+        selectedSession = available[0] || '1주차';
+      }
 
       activeQuizzes = data.active_quizzes || (data.active_quiz ? [data.active_quiz] : []);
 
       renderCourseTabs(data.courses || ['원가회계'], selectedCourse);
       applyCourseUI();
+      syncActiveQuizAndCourse();
     } catch (err) {
       console.error('[Student] 과목 로드 오류:', err);
     }
@@ -122,6 +131,14 @@ document.addEventListener('DOMContentLoaded', () => {
       if (s === selectedSession) opt.selected = true;
       sessionSelect.appendChild(opt);
     });
+
+    // [단일 진실 공급원(SSOT) 동기화]
+    sessionSelect.value = selectedSession;
+    if (sessionSelect.value !== selectedSession) {
+      selectedSession = sessions[0] || '1주차';
+      sessionSelect.value = selectedSession;
+    }
+    selectedSession = sessionSelect.value;
 
     if (studentCardCourse) studentCardCourse.innerText = selectedCourse;
     if (studentCardSession) studentCardSession.innerText = selectedSession;
@@ -185,17 +202,21 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) {}
 
     const available = sessionMap[selectedCourse] || ['1주차'];
-    selectedSession = available[0] || '1주차';
+    const savedSession = activeSessionMap ? activeSessionMap[selectedCourse] : null;
+    selectedSession = (savedSession && available.includes(savedSession)) ? savedSession : (available[0] || '1주차');
     applyCourseUI();
+    syncActiveQuizAndCourse();
   });
 
   sessionSelect.addEventListener('change', () => {
     selectedSession = sessionSelect.value;
+    if (activeSessionMap) activeSessionMap[selectedCourse] = selectedSession;
     if (studentCardSession) studentCardSession.innerText = selectedSession;
     const studentHeaderSubtitle = document.getElementById('studentHeaderSubtitle');
     if (studentHeaderSubtitle) {
       studentHeaderSubtitle.innerText = `현재 수강: ${selectedCourse} (${selectedSession})`;
     }
+    syncActiveQuizAndCourse();
     if (typeof updateQuizDisplay === 'function') {
       updateQuizDisplay();
     }
@@ -554,7 +575,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (isSyncingQuiz) return;
     isSyncingQuiz = true;
     try {
-      const res = await fetch('/api/current_quiz?_t=' + Date.now());
+      const qParams = new URLSearchParams({
+        _t: Date.now(),
+        course: selectedCourse,
+        session: selectedSession
+      });
+      const res = await fetch('/api/current_quiz?' + qParams.toString());
       if (!res.ok) return;
       const data = await res.json();
       activeQuizzes = (data.active_quizzes || (data.active_quiz ? [data.active_quiz] : [])).filter(q => q.is_published !== false);

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>교수 모드 | 과목별 강의시간 분리 & 누적 AI 해석 대시보드</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260909_2">
+  <link rel="stylesheet" href="/static/style.css?v=20260909_3">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
@@ -71,6 +71,17 @@
           <div id="editingQuizBanner" style="display: none; background: #fef3c7; border: 1px solid #fde68a; border-radius: 6px; padding: 0.45rem 0.75rem; margin-bottom: 0.6rem; font-size: 0.85rem; color: #92400e; justify-content: space-between; align-items: center;">
             <span>✏️ <b>문제 내용 수정 중</b> (수정 후 [임시 저장] 또는 [즉시 출제]를 누르세요)</span>
             <button id="cancelEditQuizBtn" type="button" class="btn" style="padding: 2px 7px; font-size: 0.75rem; background: #ffffff; border: 1px solid #d97706; color: #b45309;">수정 취소</button>
+          </div>
+
+          <div style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem; background: #eef2ff; padding: 0.6rem; border-radius: 6px; border: 1px solid #c7d2fe;">
+            <div style="flex: 1;">
+              <label style="font-size: 0.8rem; font-weight: 700; color: #3730a3;">출제 대상 과목:</label>
+              <select id="quizCourseSelect" class="chat-input" style="width: 100%; margin-top: 3px; padding: 0.35rem 0.5rem; font-size: 0.85rem; background: #ffffff;"></select>
+            </div>
+            <div style="flex: 1;">
+              <label style="font-size: 0.8rem; font-weight: 700; color: #3730a3;">출제 대상 주차(차시):</label>
+              <select id="quizSessionSelect" class="chat-input" style="width: 100%; margin-top: 3px; padding: 0.35rem 0.5rem; font-size: 0.85rem; background: #ffffff;"></select>
+            </div>
           </div>
 
           <div style="margin-bottom: 0.75rem;">
@@ -317,6 +328,6 @@
 
   </main>
 
-  <script src="/static/professor.js?v=20260909_2"></script>
+  <script src="/static/professor.js?v=20260909_3"></script>
 </body>
 </html>

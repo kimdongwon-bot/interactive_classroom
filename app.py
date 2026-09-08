@@ -166,11 +166,14 @@ def save_quiz_to_storage(quiz):
     """퀴즈 객체를 history.json의 해당 과목 퀴즈 목록에 저장/갱신 (타 과목 고스트 레코드 정리 및 기존 answers 보존)"""
     try:
         data = load_data()
-        course = quiz.get("course") or "원가회계"
-        quiz["course"] = course
-        if not quiz.get("session"):
-            quiz["session"] = "1주차"
+        course = (quiz.get("course") or "").strip() or "원가회계"
+        session_val = (quiz.get("session") or "").strip()
+        if not session_val:
+            print(f"퀴즈 저장 거부: session 값이 비어있습니다. (id: {quiz.get('id')})")
+            return False
 
+        quiz["course"] = course
+        quiz["session"] = session_val
         quiz_id = quiz.get("id")
 
         # 1) 타 과목에 남아있는 동일 ID 고스트 레코드 완벽 정리
@@ -361,6 +364,10 @@ def api_get_courses():
     sync_quizzes_from_storage()
     data = load_data()
     session_map = {c: data["courses"][c].get("sessions", []) for c in data["courses"]}
+    active_session_map = {
+        c: data["courses"][c].get("active_session") or (data["courses"][c].get("sessions", ["1주차"])[0] if data["courses"][c].get("sessions") else "1주차")
+        for c in data["courses"]
+    }
     is_prof = session.get('is_professor', False)
     filtered_quizzes = active_quizzes if is_prof else [q for q in active_quizzes if q.get("is_published", True)]
     curr_quiz = active_quiz if (is_prof or (active_quiz and active_quiz.get("is_published", True))) else (filtered_quizzes[-1] if filtered_quizzes else None)
@@ -368,11 +375,16 @@ def api_get_courses():
     if not is_prof:
         filtered_quizzes = sanitize_quizzes_for_student(filtered_quizzes)
         curr_quiz = sanitize_quiz_for_student(curr_quiz)
+
+    active_c = data.get("active_course", "원가회계")
+    active_s = data["courses"].get(active_c, {}).get("active_session") or data.get("active_session", "1주차")
+
     return jsonify({
-        "active_course": data.get("active_course", "원가회계"),
-        "active_session": data.get("active_session", "1주차"),
+        "active_course": active_c,
+        "active_session": active_s,
         "courses": list(data["courses"].keys()),
         "session_map": session_map,
+        "active_session_map": active_session_map,
         "active_quiz": curr_quiz,
         "active_quizzes": filtered_quizzes,
         "quiz_stats": quiz_stats
@@ -383,18 +395,38 @@ def api_get_current_quiz():
     sync_quizzes_from_storage()
     data = load_data()
     is_prof = session.get('is_professor', False)
+
+    req_course = request.args.get('course', '').strip()
+    req_session = request.args.get('session', '').strip()
+
     filtered_quizzes = active_quizzes if is_prof else [q for q in active_quizzes if q.get("is_published", True)]
+
+    # 서버 사이드 과목 및 차시(주차) 필터링 지원
+    if req_course:
+        filtered_quizzes = [q for q in filtered_quizzes if (q.get("course") or "").strip() == req_course]
+    if req_session and req_session != '전체':
+        filtered_quizzes = [q for q in filtered_quizzes if (q.get("session") or "").strip() == req_session]
+
     curr_quiz = active_quiz if (is_prof or (active_quiz and active_quiz.get("is_published", True))) else (filtered_quizzes[-1] if filtered_quizzes else None)
+    if curr_quiz and req_course and (curr_quiz.get("course") or "").strip() != req_course:
+        curr_quiz = filtered_quizzes[-1] if filtered_quizzes else None
+    if curr_quiz and req_session and req_session != '전체' and (curr_quiz.get("session") or "").strip() != req_session:
+        curr_quiz = filtered_quizzes[-1] if filtered_quizzes else None
+
     quiz_stats = get_all_quiz_stats() if is_prof else sanitize_quiz_stats_for_student(get_all_quiz_stats())
     if not is_prof:
         filtered_quizzes = sanitize_quizzes_for_student(filtered_quizzes)
         curr_quiz = sanitize_quiz_for_student(curr_quiz)
+
+    active_c = req_course or data.get("active_course", "원가회계")
+    active_s = req_session if (req_session and req_session != '전체') else (data["courses"].get(active_c, {}).get("active_session") or data.get("active_session", "1주차"))
+
     return jsonify({
         "active_quiz": curr_quiz,
         "active_quizzes": filtered_quizzes,
         "quiz_stats": quiz_stats,
-        "active_course": data.get("active_course", "원가회계"),
-        "active_session": data.get("active_session", "1주차")
+        "active_course": active_c,
+        "active_session": active_s
     })
 
 @app.route('/api/set_active_session', methods=['POST'])
@@ -409,8 +441,14 @@ def api_set_active_session():
     data = load_data()
     if new_course and new_course in data["courses"]:
         data["active_course"] = new_course
-    if new_session:
+        if new_session:
+            data["courses"][new_course]["active_session"] = new_session
+            data["active_session"] = new_session
+    elif new_session:
         data["active_session"] = new_session
+        curr_c = data.get("active_course", "원가회계")
+        if curr_c in data.get("courses", {}):
+            data["courses"][curr_c]["active_session"] = new_session
 
     save_data(data)
     graph_data = get_graph_data(data["active_course"], data["active_session"])
@@ -990,10 +1028,16 @@ def handle_send_quiz(data):
     global active_quiz, active_quizzes, quiz_answers_by_id
     quiz_id = data.get("id") or f"quiz_{int(datetime.datetime.now().timestamp()*1000)}_{uuid.uuid4().hex[:4]}"
     is_pub = data.get("is_published", True)
+    course = (data.get("course") or "").strip() or "원가회계"
+    session_val = (data.get("session") or "").strip()
+    if not session_val or session_val == '전체':
+        emit('quiz_error', {"message": "출제 주차(차시)를 정확히 선택해 주세요."})
+        return
+
     new_quiz = {
         "id": quiz_id,
-        "course": data.get("course", "원가회계"),
-        "session": data.get("session", "1주차"),
+        "course": course,
+        "session": session_val,
         "question": data.get("question", ""),
         "options": data.get("options", []),
         "answer": data.get("answer", 0),
@@ -1042,10 +1086,16 @@ def handle_save_draft_quiz(data):
 
     global active_quizzes, quiz_answers_by_id
     quiz_id = data.get("id") or f"quiz_{int(datetime.datetime.now().timestamp()*1000)}_{uuid.uuid4().hex[:4]}"
+    course = (data.get("course") or "").strip() or "원가회계"
+    session_val = (data.get("session") or "").strip()
+    if not session_val or session_val == '전체':
+        emit('quiz_error', {"message": "임시 저장할 주차(차시)를 정확히 선택해 주세요."})
+        return
+
     draft_quiz = {
         "id": quiz_id,
-        "course": data.get("course", "원가회계"),
-        "session": data.get("session", "1주차"),
+        "course": course,
+        "session": session_val,
         "question": data.get("question", ""),
         "options": data.get("options", []),
         "answer": data.get("answer", 0),
@@ -1149,10 +1199,12 @@ def handle_update_quiz(data):
     if not quiz:
         return
 
-    if "course" in data and data["course"]:
-        quiz["course"] = data["course"]
-    if "session" in data and data["session"]:
-        quiz["session"] = data["session"]
+    if "course" in data and str(data["course"]).strip():
+        quiz["course"] = str(data["course"]).strip()
+    if "session" in data and str(data["session"]).strip():
+        s_val = str(data["session"]).strip()
+        if s_val and s_val != '전체':
+            quiz["session"] = s_val
     if "question" in data:
         quiz["question"] = data.get("question", "")
     if "options" in data:
