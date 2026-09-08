@@ -7,6 +7,25 @@ from app import app, socketio, load_data, save_data, init_default_data, DATA_FIL
 sys.stdout.reconfigure(encoding='utf-8')
 
 class MultiCourseTeachingAppTestCase(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._backup_data = None
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                    cls._backup_data = f.read()
+            except Exception:
+                pass
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls._backup_data is not None:
+            try:
+                with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                    f.write(cls._backup_data)
+            except Exception:
+                pass
+
     def setUp(self):
         self.app = app
         self.app.config['TESTING'] = True
@@ -76,7 +95,7 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
             'course': '원가회계',
             'session': '1주차',
             'category': '조금 어려움',
-            'text': 'CVP 손익분기점 공식 계산이 헷갈립니다.'
+            'text': '제조원가와 판관비 분류 기준이 조금 헷갈립니다.'
         })
 
         # 2. 캡스톤디자인(ESG공시) 1주차에 피드백 제출
@@ -99,7 +118,7 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
         res_cost = self.client.get('/api/graph_data?course=원가회계&session=1주차')
         data_cost = json.loads(res_cost.data)
         self.assertEqual(data_cost['total'], 1)
-        self.assertEqual(data_cost['recent_opinions'][0]['text'], 'CVP 손익분기점 공식 계산이 헷갈립니다.')
+        self.assertEqual(data_cost['recent_opinions'][0]['text'], '제조원가와 판관비 분류 기준이 조금 헷갈립니다.')
         print("  ✓ [원가회계 - 1주차] 피드백 1건 격리 저장 확인")
 
         res_esg = self.client.get('/api/graph_data?course=캡스톤디자인(ESG공시)&session=1주차')
@@ -354,10 +373,10 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
         quiz_cost_1 = {
             "course": "원가회계",
             "session": "1주차",
-            "question": "손익분기점(BEP) 공식은 무엇인가?",
-            "options": ["고정비 / 공헌이익률", "변동비 / 매출액", "매출액 - 변동비", "영업이익 / 고정비"],
+            "question": "원가의 추적가능성에 따른 분류는?",
+            "options": ["직접원가와 간접원가", "제조원가와 판관비", "변동원가와 고정원가", "기회원가와 매몰원가"],
             "answer": 0,
-            "explanation": "손익분기점 매출액 = 고정원가 / 공헌이익률 입니다."
+            "explanation": "추적가능성에 따라 특정 원가대상에 직접 추적할 수 있는 직접원가와 추적할 수 없는 간접원가로 구분합니다."
         }
         prof_socket.emit('send_quiz', quiz_cost_1)
 
@@ -564,7 +583,7 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
             sess['is_professor'] = True
 
         # 1. 수업자료 업로드 (원가회계 1주차 교안)
-        sample_content = "제1장 원가회계의 기초 및 CVP 손익분기점 분석\n총원가는 재료원가, 노무원가, 경비로 구성된다.\n고정비와 변동비 분류 원리.".encode('utf-8')
+        sample_content = "제1장 원가회계의 기초 및 원가의 개념과 분류\n총원가는 재료원가, 노무원가, 제조경비로 구성된다.\n추적가능성에 따른 직접원가와 간접원가, 원가행태에 따른 고정원가와 변동원가 분류 원리.".encode('utf-8')
         data = {
             'course': '원가회계',
             'session': '1주차',

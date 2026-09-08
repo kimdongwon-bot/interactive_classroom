@@ -687,9 +687,13 @@ def api_analyze_opinions():
     course = req_data.get('course') or data.get('active_course', '원가회계')
     sess = req_data.get('session') or data.get('active_session', '1주차')
 
-    # 1. 실시간 의견 피드백 수집
-    graph_data = get_graph_data(course, sess)
-    opinions = graph_data.get("recent_opinions", [])
+    # 1. 실시간 의견 피드백 수집 (해당 세션의 모든 실제 학생 피드백 전달)
+    course_obj = data.get("courses", {}).get(course, {"sessions": [], "opinions": []})
+    all_ops = course_obj.get("opinions", [])
+    if sess == "전체":
+        opinions = all_ops
+    else:
+        opinions = [op for op in all_ops if op.get("session") == sess]
 
     # 2. 수업자료(PDF/PPT) 내용 조회
     mat_data = data.get("courses", {}).get(course, {}).get("materials", {}).get(sess, {})
