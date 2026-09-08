@@ -27,6 +27,7 @@ def add_header(response):
 PROFESSOR_PIN = os.getenv('PROFESSOR_PIN', '2528')
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 DATA_FILE = os.path.join(DATA_DIR, 'history.json')
+BACKUP_FILE = os.path.join(DATA_DIR, 'history.json.bak')
 data_lock = threading.Lock()
 
 CATEGORY_KEYS = ["이해 완료", "조금 어려움", "질문 있음", "예제 필요"]
@@ -49,6 +50,16 @@ def init_default_data():
 def load_data():
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR, exist_ok=True)
+
+    # DATA_FILE이 없거나 비어있는 경우, 백업 파일이 있으면 자동 복구
+    if (not os.path.exists(DATA_FILE) or os.path.getsize(DATA_FILE) == 0) and os.path.exists(BACKUP_FILE) and os.path.getsize(BACKUP_FILE) > 0:
+        try:
+            import shutil
+            shutil.copy2(BACKUP_FILE, DATA_FILE)
+            print("[*] history.json이 비어 있어 백업(history.json.bak)에서 자동 복구 완료.")
+        except Exception as e:
+            print(f"백업 자동 복구 실패: {e}")
+
     if not os.path.exists(DATA_FILE):
         data = init_default_data()
         save_data(data)
@@ -65,7 +76,17 @@ def load_data():
                 }
             return data
     except Exception as e:
-        print(f"데이터 파일 읽기 오류: {e}, 기본값으로 복구합니다.")
+        print(f"데이터 파일 읽기 오류: {e}, 백업 파일에서 복구를 시도합니다.")
+        if os.path.exists(BACKUP_FILE) and os.path.getsize(BACKUP_FILE) > 0:
+            try:
+                with open(BACKUP_FILE, 'r', encoding='utf-8') as bf:
+                    data = json.load(bf)
+                    print("[*] 손상된 history.json을 history.json.bak에서 안전하게 복구했습니다.")
+                    save_data(data)
+                    return data
+            except Exception as be:
+                print(f"백업 파일 복구 실패: {be}")
+
         data = init_default_data()
         save_data(data)
         return data
@@ -74,8 +95,26 @@ def save_data(data):
     with data_lock:
         if not os.path.exists(DATA_DIR):
             os.makedirs(DATA_DIR, exist_ok=True)
-        with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        # 1. 기존 유효 파일이 있으면 자동 백업 생성 (history.json.bak)
+        if os.path.exists(DATA_FILE) and os.path.getsize(DATA_FILE) > 0:
+            try:
+                import shutil
+                shutil.copy2(DATA_FILE, BACKUP_FILE)
+            except Exception as e:
+                print(f"백업 파일 생성 오류: {e}")
+
+        # 2. 임시 파일 기록 후 원자적 교체로 파일 손상 방지
+        temp_file = os.path.join(DATA_DIR, f"history.tmp.{uuid.uuid4().hex[:6]}")
+        try:
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(temp_file, DATA_FILE)
+        except Exception:
+            with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            if os.path.exists(temp_file):
+                try: os.remove(temp_file)
+                except: pass
 
 # 활성 퀴즈 상태 (인메모리 다중 퀴즈 및 문제별 통계 지원)
 active_quiz = None
@@ -91,7 +130,8 @@ def sync_quizzes_from_storage():
         for c, cdata in data.get("courses", {}).items():
             for q in cdata.get("quizzes", []):
                 q.setdefault("course", c)
-                q.setdefault("is_published", False)
+                if "is_published" not in q:
+                    q["is_published"] = True
                 if "answers" in q:
                     quiz_answers_by_id[q.get("id")] = list(q.get("answers", []))
                 if not any(item.get("id") == q.get("id") for item in loaded):
