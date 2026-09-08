@@ -126,40 +126,9 @@
             </span>
           </div>
 
-          <!-- 문제 선택 탭 바 (문제 1 [임시], 문제 2 [공개]...) -->
-          <div id="quizTabsBar" style="display: flex; gap: 0.4rem; overflow-x: auto; padding-bottom: 0.5rem; margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); min-height: 36px; align-items: center;">
-            <!-- JS에서 동적 주입 -->
-          </div>
-
-          <!-- 선택된 문제 요약 정보 -->
-          <div id="selectedQuizInfo" style="display: none; margin-bottom: 0.5rem; background: #ffffff; border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.75rem;">
-            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; flex-wrap: wrap;">
-              <div style="flex: 1; min-width: 220px;">
-                <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
-                  <span id="selectedQuizStatusBadge" style="font-size: 0.75rem; font-weight: 700; padding: 2px 7px; border-radius: 4px;"></span>
-                  <div id="selectedQuizTitle" style="font-size: 0.88rem; font-weight: 700; color: #0f172a; line-height: 1.3;"></div>
-                </div>
-                <div style="font-size: 0.8rem; color: var(--text-muted);">
-                  총 응답: <b id="quizResponseCount" style="color: var(--primary);">0</b>명 &nbsp;|&nbsp; 정답: <b id="selectedQuizAnswerBadge" style="color: #16a34a;">보기 1</b>
-                </div>
-              </div>
-
-              <!-- 제어 버튼 그룹 (공개/비공개 전환, 수정, 삭제) -->
-              <div style="display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;">
-                <button id="publishQuizBtn" class="btn" style="background: #16a34a; color: #ffffff; padding: 0.25rem 0.65rem; font-size: 0.8rem; font-weight: 700; display: none;">
-                  🚀 학생에게 공개하기
-                </button>
-                <button id="unpublishQuizBtn" class="btn" style="background: #d97706; color: #ffffff; padding: 0.25rem 0.65rem; font-size: 0.8rem; font-weight: 700; display: none;">
-                  🔒 비공개로 전환
-                </button>
-                <button id="editSelectedQuizBtn" class="btn" style="background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; padding: 0.25rem 0.6rem; font-size: 0.78rem;">
-                  ✏️ 내용 수정
-                </button>
-                <button id="deleteSelectedQuizBtn" class="btn" style="background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; padding: 0.25rem 0.6rem; font-size: 0.78rem; white-space: nowrap;">
-                  🗑️ 삭제
-                </button>
-              </div>
-            </div>
+          <!-- 문제 필터 및 빠른 이동 탭 바 -->
+          <div id="quizTabsBar" style="display: flex; gap: 0.4rem; overflow-x: auto; padding-bottom: 0.5rem; margin-bottom: 0.75rem; border-bottom: 1px solid var(--border); min-height: 36px; align-items: center;">
+            <!-- JS에서 동적 주입: [📋 전체 동시 보기], [문제 1], [문제 2]... -->
           </div>
 
           <!-- 미출제 시 안내 문구 -->
@@ -167,16 +136,9 @@
             현재 차시에 작성된 퀴즈가 없습니다.<br>왼쪽에서 문제를 작성하고 <b>[문제 임시 저장]</b> 또는 <b>[즉시 출제]</b>를 눌러주세요.
           </div>
 
-          <!-- 임시 저장 상태 안내 박스 -->
-          <div id="draftQuizNotice" style="display: none; text-align: center; background: #fffbeb; border: 1px dashed #fcd34d; border-radius: 6px; padding: 1.75rem 1rem; color: #92400e; font-size: 0.88rem; margin-top: 0.5rem;">
-            <div style="font-size: 1.6rem; margin-bottom: 0.3rem;">🔒</div>
-            <b>아직 학생들에게 공개되지 않은 [임시 저장] 문제입니다.</b><br>
-            우측 상단의 <b>[🚀 학생에게 공개하기]</b> 버튼을 누르면 학생 화면에 실시간으로 출제되며 응답 차트가 활성화됩니다.
-          </div>
-
-          <!-- 실시간 차트 -->
-          <div class="chart-wrapper" id="quizChartWrapper" style="height: 190px; display: none;">
-            <canvas id="quizStatsChart"></canvas>
+          <!-- 출제/임시저장된 모든 문제의 풀이 결과와 차트가 동시에 표시되는 컨테이너 -->
+          <div id="quizResultsContainer" style="display: flex; flex-direction: column; gap: 1rem; max-height: 620px; overflow-y: auto; padding-right: 4px;">
+            <!-- JS에서 각 문제별 결과 카드와 실시간 막대그래프가 동시에 생성됨 -->
           </div>
         </div>
       </div>
@@ -318,6 +280,6 @@
 
   </main>
 
-  <script src="/static/professor.js?v=20260907_1"></script>
+  <script src="/static/professor.js?v=20260908_1"></script>
 </body>
 </html>

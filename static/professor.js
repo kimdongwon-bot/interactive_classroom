@@ -5,6 +5,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentCourse = '원가회계';
   let currentSession = '1주차';
   let sessionMap = {};
+  let activeQuizzes = [];
+  let quizStats = {};
+  let activeQuizFilter = 'ALL';
 
   socket.on('connect', () => {
     profConnStatus.className = 'status-badge online';
@@ -49,30 +52,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // 1-2. 퀴즈 실시간 응답 차트
-  const ctxQuiz = document.getElementById('quizStatsChart').getContext('2d');
-  const quizChart = new Chart(ctxQuiz, {
-    type: 'bar',
-    data: {
-      labels: ['보기 1', '보기 2', '보기 3', '보기 4'],
-      datasets: [{
-        label: '응답자 수',
-        data: [0, 0, 0, 0],
-        backgroundColor: 'rgba(99, 102, 241, 0.8)',
-        borderColor: '#6366f1',
-        borderWidth: 1,
-        borderRadius: 4
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        y: { beginAtZero: true, ticks: { stepSize: 1 } }
-      },
-      plugins: { legend: { display: false } }
-    }
-  });
+  // 1-2. 퀴즈 문제별 동적 Chart.js 인스턴스 맵 (quiz_id -> Chart)
+  const quizChartsMap = {};
 
   // 1-3. 누적 주차별 이해도 추이 차트
   const ctxTrend = document.getElementById('cumulativeTrendChart').getContext('2d');
@@ -623,125 +604,235 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const sessionQuizzes = getCurrentSessionQuizzes();
     const tabsBar = document.getElementById('quizTabsBar');
-    const selectedInfo = document.getElementById('selectedQuizInfo');
-    const chartWrapper = document.getElementById('quizChartWrapper');
+    const container = document.getElementById('quizResultsContainer');
     const noQuiz = document.getElementById('noQuizPlaceholder');
-    const draftNotice = document.getElementById('draftQuizNotice');
-    const publishBtn = document.getElementById('publishQuizBtn');
-    const unpublishBtn = document.getElementById('unpublishQuizBtn');
 
+    // 1) 기존 차트 인스턴스 모두 정리
+    Object.keys(quizChartsMap).forEach(id => {
+      if (quizChartsMap[id]) {
+        try {
+          quizChartsMap[id].destroy();
+        } catch (e) {
+          console.warn('Chart destroy error:', e);
+        }
+        delete quizChartsMap[id];
+      }
+    });
+
+    // 2) 출제된 퀴즈가 없는 경우
     if (sessionQuizzes.length === 0) {
       if (tabsBar) tabsBar.innerHTML = '';
-      if (selectedInfo) selectedInfo.style.display = 'none';
-      if (chartWrapper) chartWrapper.style.display = 'none';
-      if (draftNotice) draftNotice.style.display = 'none';
+      if (container) container.innerHTML = '';
       if (noQuiz) noQuiz.style.display = 'block';
-      selectedQuizId = null;
       return;
     }
 
     if (noQuiz) noQuiz.style.display = 'none';
-    if (selectedInfo) selectedInfo.style.display = 'block';
 
-    // 선택된 퀴즈 ID가 유효하지 않으면 첫 번째 퀴즈 선택
-    if (!selectedQuizId || !sessionQuizzes.find(q => q.id === selectedQuizId)) {
-      selectedQuizId = sessionQuizzes[0].id;
-    }
-
-    // 탭 바 렌더링 (임시 저장 / 공개 상태 뱃지 표시)
+    // 3) 상단 필터 / 바로가기 탭 바 렌더링
     if (tabsBar) {
       tabsBar.innerHTML = '';
+
+      // [📋 전체 동시 보기] 버튼
+      const allBtn = document.createElement('button');
+      allBtn.type = 'button';
+      const isAllActive = (activeQuizFilter === 'ALL');
+      allBtn.className = `quiz-tab-btn ${isAllActive ? 'active' : ''}`;
+      allBtn.style.cssText = `padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; font-weight: 700; cursor: pointer; transition: all 0.2s; border: 1px solid ${isAllActive ? '#4f46e5' : '#cbd5e1'}; background: ${isAllActive ? '#4f46e5' : '#ffffff'}; color: ${isAllActive ? '#ffffff' : '#334155'}; white-space: nowrap;`;
+      allBtn.innerHTML = `📋 전체 동시 보기 (${sessionQuizzes.length}문제)`;
+      allBtn.addEventListener('click', () => {
+        activeQuizFilter = 'ALL';
+        renderProfessorQuizDashboard();
+      });
+      tabsBar.appendChild(allBtn);
+
+      // 각 문제별 탭 버튼
       sessionQuizzes.forEach((q, idx) => {
         const stat = quizStats[q.id];
         const count = (stat && stat.total_responses) || 0;
         const btn = document.createElement('button');
         btn.type = 'button';
-        const isSelected = (q.id === selectedQuizId);
+        const isSelected = (activeQuizFilter === q.id);
         const isPub = (q.is_published === true);
         btn.className = `quiz-tab-btn ${isSelected ? 'active' : ''}`;
         btn.style.cssText = `padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer; transition: all 0.2s; border: 1px solid ${isSelected ? '#4f46e5' : '#cbd5e1'}; background: ${isSelected ? '#4f46e5' : '#ffffff'}; color: ${isSelected ? '#ffffff' : '#334155'}; white-space: nowrap;`;
 
         const badgeHtml = isPub
-          ? `<span style="background:${isSelected ? 'rgba(255,255,255,0.3)' : '#dcfce7'}; color:${isSelected ? '#ffffff' : '#15803d'}; padding: 1px 5px; border-radius: 4px; font-size: 0.72rem; margin-left: 3px; font-weight: 700;">공개 ${count}명</span>`
-          : `<span style="background:${isSelected ? 'rgba(255,255,255,0.3)' : '#fef3c7'}; color:${isSelected ? '#ffffff' : '#b45309'}; padding: 1px 5px; border-radius: 4px; font-size: 0.72rem; margin-left: 3px; font-weight: 700;">🔒임시</span>`;
+          ? `<span id="tabBadge_${q.id}" style="background:${isSelected ? 'rgba(255,255,255,0.3)' : '#dcfce7'}; color:${isSelected ? '#ffffff' : '#15803d'}; padding: 1px 5px; border-radius: 4px; font-size: 0.72rem; margin-left: 3px; font-weight: 700;">공개 ${count}명</span>`
+          : `<span id="tabBadge_${q.id}" style="background:${isSelected ? 'rgba(255,255,255,0.3)' : '#fef3c7'}; color:${isSelected ? '#ffffff' : '#b45309'}; padding: 1px 5px; border-radius: 4px; font-size: 0.72rem; margin-left: 3px; font-weight: 700;">🔒임시</span>`;
 
         btn.innerHTML = `문제 ${idx + 1} ${badgeHtml}`;
         btn.addEventListener('click', () => {
-          selectedQuizId = q.id;
+          activeQuizFilter = q.id;
           renderProfessorQuizDashboard();
+          const targetCard = document.getElementById(`quizCard_${q.id}`);
+          if (targetCard) {
+            targetCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
         });
         tabsBar.appendChild(btn);
       });
     }
 
-    // 선택된 퀴즈 상세 갱신
-    const currentQuiz = sessionQuizzes.find(q => q.id === selectedQuizId) || sessionQuizzes[0];
-    const qIndex = sessionQuizzes.indexOf(currentQuiz) + 1;
-    const isCurrentPub = (currentQuiz.is_published === true);
+    // 4) 표시할 퀴즈 목록 결정 (ALL 이면 전체 동시 표시)
+    let quizzesToDisplay = (activeQuizFilter === 'ALL')
+      ? sessionQuizzes
+      : sessionQuizzes.filter(q => q.id === activeQuizFilter);
 
-    const statusBadge = document.getElementById('selectedQuizStatusBadge');
-    if (statusBadge) {
-      if (isCurrentPub) {
-        statusBadge.innerText = '🟢 학생에게 공개 중';
-        statusBadge.style.background = '#dcfce7';
-        statusBadge.style.color = '#15803d';
-        statusBadge.style.border = '1px solid #bbf7d0';
-      } else {
-        statusBadge.innerText = '🔒 임시 저장 (미공개)';
-        statusBadge.style.background = '#fef3c7';
-        statusBadge.style.color = '#b45309';
-        statusBadge.style.border = '1px solid #fde68a';
-      }
+    if (quizzesToDisplay.length === 0) {
+      activeQuizFilter = 'ALL';
+      quizzesToDisplay = sessionQuizzes;
     }
 
-    if (publishBtn) publishBtn.style.display = isCurrentPub ? 'none' : 'inline-block';
-    if (unpublishBtn) unpublishBtn.style.display = isCurrentPub ? 'inline-block' : 'none';
+    // 5) 문제별 카드 HTML 렌더링
+    if (!container) return;
+    container.innerHTML = '';
 
-    const titleEl = document.getElementById('selectedQuizTitle');
-    if (titleEl) {
-      titleEl.innerHTML = `<span style="background: #e0e7ff; color: #3730a3; padding: 2px 6px; border-radius: 4px; font-size: 0.78rem; margin-right: 6px;">문제 ${qIndex}</span> ${escapeHtml(currentQuiz.question)}`;
-    }
+    quizzesToDisplay.forEach((q) => {
+      const globalIdx = sessionQuizzes.indexOf(q) + 1;
+      const isPub = (q.is_published === true);
+      const stat = quizStats[q.id] || { total_responses: 0, stats: {} };
+      const count = stat.total_responses || 0;
+      const ansIdx = parseInt(q.answer, 10);
+      const ansText = (q.options && q.options[ansIdx]) ? escapeHtml(q.options[ansIdx]) : '';
+      const ansPreview = ansText.length > 25 ? ansText.substring(0, 25) + '…' : ansText;
 
-    const countEl = document.getElementById('quizResponseCount');
-    const currentStat = quizStats[currentQuiz.id] || { total_responses: 0, stats: {} };
-    if (countEl) {
-      countEl.innerText = currentStat.total_responses || 0;
-    }
+      const card = document.createElement('div');
+      card.className = 'card quiz-card';
+      card.id = `quizCard_${q.id}`;
+      card.style.cssText = `border: 1px solid ${isPub ? '#e2e8f0' : '#fef3c7'}; background: ${isPub ? '#ffffff' : '#fffdfa'}; border-radius: 8px; padding: 0.85rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 0.25rem;`;
 
-    const answerBadge = document.getElementById('selectedQuizAnswerBadge');
-    if (answerBadge) {
-      const ansIdx = parseInt(currentQuiz.answer, 10);
-      const ansText = currentQuiz.options && currentQuiz.options[ansIdx] ? `: ${escapeHtml(currentQuiz.options[ansIdx])}` : '';
-      answerBadge.innerText = `보기 ${ansIdx + 1}${ansText ? ' (' + ansText.substring(0, 15) + '...)' : ''}`;
-    }
+      card.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.6rem; border-bottom: 1px solid #f1f5f9; padding-bottom: 0.5rem;">
+          <div style="flex: 1; min-width: 200px;">
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px; flex-wrap: wrap;">
+              <span style="background: #e0e7ff; color: #3730a3; padding: 2px 7px; border-radius: 4px; font-size: 0.78rem; font-weight: 700;">문제 ${globalIdx}</span>
+              ${isPub
+                ? `<span style="background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; font-size: 0.75rem; font-weight: 700; padding: 2px 7px; border-radius: 4px;">🟢 공개 중</span>`
+                : `<span style="background: #fef3c7; color: #b45309; border: 1px solid #fde68a; font-size: 0.75rem; font-weight: 700; padding: 2px 7px; border-radius: 4px;">🔒 임시 저장 (미공개)</span>`
+              }
+              <div style="font-size: 0.92rem; font-weight: 700; color: #0f172a; line-height: 1.3;">${escapeHtml(q.question)}</div>
+            </div>
+            <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+              <span>총 응답: <b id="quizResponseCount_${q.id}" style="color: var(--primary); font-size: 0.9rem;">${count}</b>명</span>
+              <span>정답: <b style="color: #16a34a; font-weight: 700;">보기 ${ansIdx + 1}${ansPreview ? ': ' + ansPreview : ''}</b></span>
+            </div>
+          </div>
 
-    // 상태에 따른 차트 또는 임시저장 안내 분기
-    if (isCurrentPub) {
-      if (draftNotice) draftNotice.style.display = 'none';
-      if (chartWrapper) chartWrapper.style.display = 'block';
+          <div style="display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;">
+            ${isPub
+              ? `<button type="button" class="btn btn-unpublish-quiz" style="background: #d97706; color: #ffffff; padding: 0.25rem 0.65rem; font-size: 0.78rem; font-weight: 700;">🔒 비공개로 전환</button>`
+              : `<button type="button" class="btn btn-publish-quiz" style="background: #16a34a; color: #ffffff; padding: 0.25rem 0.65rem; font-size: 0.78rem; font-weight: 700;">🚀 학생에게 공개하기</button>`
+            }
+            <button type="button" class="btn btn-edit-quiz" style="background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; padding: 0.25rem 0.6rem; font-size: 0.78rem;">✏️ 내용 수정</button>
+            <button type="button" class="btn btn-delete-quiz" style="background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; padding: 0.25rem 0.6rem; font-size: 0.78rem;">🗑️ 삭제</button>
+          </div>
+        </div>
 
-      if (typeof quizChart !== 'undefined' && quizChart.data) {
-        const opts = currentQuiz.options || ['보기 1', '보기 2', '보기 3', '보기 4'];
-        quizChart.data.labels = opts.map((opt, i) => {
-          const short = opt.length > 12 ? opt.substring(0, 12) + '…' : opt;
-          return `보기 ${i + 1}: ${short}`;
+        ${isPub
+          ? `<div style="height: 175px; position: relative;">
+               <canvas id="quizChart_${q.id}"></canvas>
+             </div>`
+          : `<div style="text-align: center; background: #fffbeb; border: 1px dashed #fcd34d; border-radius: 6px; padding: 1.25rem 0.75rem; color: #92400e; font-size: 0.85rem;">
+               <div style="font-size: 1.3rem; margin-bottom: 0.2rem;">🔒</div>
+               <b>아직 학생들에게 공개되지 않은 [임시 저장] 문제입니다.</b><br>
+               우측 상단의 <b>[🚀 학생에게 공개하기]</b> 버튼을 누르면 학생 화면에 실시간으로 출제되며 응답 차트가 활성화됩니다.
+             </div>`
+        }
+      `;
+
+      // 버튼 이벤트 바인딩
+      const pubBtn = card.querySelector('.btn-publish-quiz');
+      if (pubBtn) {
+        pubBtn.addEventListener('click', () => {
+          socket.emit('publish_quiz', { quiz_id: q.id });
+          alert(`[문제 ${globalIdx}]가 학생들에게 실시간으로 공개(출제)되었습니다!`);
         });
-
-        const sMap = currentStat.stats || {};
-        const ansIdx = parseInt(currentQuiz.answer, 10);
-        const dataVals = opts.map((_, i) => sMap[i] || 0);
-        const bgColors = opts.map((_, i) => i === ansIdx ? 'rgba(22, 163, 74, 0.85)' : 'rgba(99, 102, 241, 0.75)');
-        const borderColors = opts.map((_, i) => i === ansIdx ? '#16a34a' : '#4f46e5');
-
-        quizChart.data.datasets[0].data = dataVals;
-        quizChart.data.datasets[0].backgroundColor = bgColors;
-        quizChart.data.datasets[0].borderColor = borderColors;
-        quizChart.update();
       }
-    } else {
-      if (draftNotice) draftNotice.style.display = 'block';
-      if (chartWrapper) chartWrapper.style.display = 'none';
-    }
+
+      const unpubBtn = card.querySelector('.btn-unpublish-quiz');
+      if (unpubBtn) {
+        unpubBtn.addEventListener('click', () => {
+          if (!confirm(`[문제 ${globalIdx}]를 비공개(임시 저장)로 전환하시겠습니까? 학생 화면에서 문제가 즉시 내려갑니다.`)) return;
+          socket.emit('unpublish_quiz', { quiz_id: q.id });
+          alert(`[문제 ${globalIdx}]가 비공개(임시 저장)로 전환되었습니다.`);
+        });
+      }
+
+      const editBtn = card.querySelector('.btn-edit-quiz');
+      if (editBtn) {
+        editBtn.addEventListener('click', () => {
+          document.getElementById('quizQuestionInput').value = q.question || '';
+          if (q.options && q.options.length >= 4) {
+            document.getElementById('opt0').value = q.options[0] || '';
+            document.getElementById('opt1').value = q.options[1] || '';
+            document.getElementById('opt2').value = q.options[2] || '';
+            document.getElementById('opt3').value = q.options[3] || '';
+          }
+          if (q.answer !== undefined) {
+            document.getElementById('quizCorrectAnswer').value = q.answer;
+          }
+          document.getElementById('quizExplanation').value = q.explanation || '';
+
+          editingQuizId = q.id;
+          const banner = document.getElementById('editingQuizBanner');
+          if (banner) banner.style.display = 'flex';
+
+          const qIn = document.getElementById('quizQuestionInput');
+          if (qIn) qIn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
+      }
+
+      const delBtn = card.querySelector('.btn-delete-quiz');
+      if (delBtn) {
+        delBtn.addEventListener('click', () => {
+          if (!confirm(`[문제 ${globalIdx}] 퀴즈 문제를 정말 삭제하시겠습니까?`)) return;
+          socket.emit('delete_quiz', { quiz_id: q.id });
+        });
+      }
+
+      container.appendChild(card);
+
+      // 6) 공개된 문제인 경우 독립적인 Chart.js 인스턴스 생성
+      if (isPub) {
+        const canvasEl = document.getElementById(`quizChart_${q.id}`);
+        if (canvasEl) {
+          const ctx = canvasEl.getContext('2d');
+          const opts = q.options || ['보기 1', '보기 2', '보기 3', '보기 4'];
+          const labels = opts.map((opt, i) => {
+            const short = opt.length > 15 ? opt.substring(0, 15) + '…' : opt;
+            return `보기 ${i + 1}: ${short}`;
+          });
+          const sMap = stat.stats || {};
+          const dataVals = opts.map((_, i) => sMap[i] || 0);
+          const bgColors = opts.map((_, i) => i === ansIdx ? 'rgba(22, 163, 74, 0.85)' : 'rgba(99, 102, 241, 0.75)');
+          const borderColors = opts.map((_, i) => i === ansIdx ? '#16a34a' : '#4f46e5');
+
+          quizChartsMap[q.id] = new Chart(ctx, {
+            type: 'bar',
+            data: {
+              labels: labels,
+              datasets: [{
+                label: '응답자 수',
+                data: dataVals,
+                backgroundColor: bgColors,
+                borderColor: borderColors,
+                borderWidth: 1.5,
+                borderRadius: 4
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              scales: {
+                y: { beginAtZero: true, ticks: { stepSize: 1 } }
+              },
+              plugins: { legend: { display: false } }
+            }
+          });
+        }
+      }
+    });
   }
 
   function getQuizFormData() {
@@ -806,56 +897,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // 3) 임시 저장 문제 -> 학생에게 공개(출제) 버튼
-  const publishQuizBtn = document.getElementById('publishQuizBtn');
-  if (publishQuizBtn) {
-    publishQuizBtn.addEventListener('click', () => {
-      if (!selectedQuizId) return;
-      socket.emit('publish_quiz', { quiz_id: selectedQuizId });
-      alert('선택한 문제가 학생들에게 실시간으로 공개(출제)되었습니다!');
-    });
-  }
-
-  // 4) 공개된 문제 -> 비공개(임시 저장)로 전환 버튼
-  const unpublishQuizBtn = document.getElementById('unpublishQuizBtn');
-  if (unpublishQuizBtn) {
-    unpublishQuizBtn.addEventListener('click', () => {
-      if (!selectedQuizId) return;
-      if (!confirm('이 문제를 비공개(임시 저장)로 전환하시겠습니까? 학생 화면에서 문제가 즉시 내려갑니다.')) return;
-      socket.emit('unpublish_quiz', { quiz_id: selectedQuizId });
-      alert('문제가 비공개(임시 저장)로 전환되었습니다.');
-    });
-  }
-
-  // 5) 선택된 문제 내용 수정 버튼
-  const editQuizBtn = document.getElementById('editSelectedQuizBtn');
-  if (editQuizBtn) {
-    editQuizBtn.addEventListener('click', () => {
-      const sessionQuizzes = getCurrentSessionQuizzes();
-      const targetQuiz = sessionQuizzes.find(q => q.id === selectedQuizId);
-      if (!targetQuiz) return;
-
-      document.getElementById('quizQuestionInput').value = targetQuiz.question || '';
-      if (targetQuiz.options && targetQuiz.options.length >= 4) {
-        document.getElementById('opt0').value = targetQuiz.options[0] || '';
-        document.getElementById('opt1').value = targetQuiz.options[1] || '';
-        document.getElementById('opt2').value = targetQuiz.options[2] || '';
-        document.getElementById('opt3').value = targetQuiz.options[3] || '';
-      }
-      if (targetQuiz.answer !== undefined) {
-        document.getElementById('quizCorrectAnswer').value = targetQuiz.answer;
-      }
-      document.getElementById('quizExplanation').value = targetQuiz.explanation || '';
-
-      editingQuizId = targetQuiz.id;
-      const banner = document.getElementById('editingQuizBanner');
-      if (banner) banner.style.display = 'flex';
-
-      const qIn = document.getElementById('quizQuestionInput');
-      if (qIn) qIn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    });
-  }
-
   // 수정 취소 버튼
   const cancelEditBtn = document.getElementById('cancelEditQuizBtn');
   if (cancelEditBtn) {
@@ -864,17 +905,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // 6) 개별 문제 삭제 버튼
-  const deleteQuizBtn = document.getElementById('deleteSelectedQuizBtn');
-  if (deleteQuizBtn) {
-    deleteQuizBtn.addEventListener('click', () => {
-      if (!selectedQuizId) return;
-      if (!confirm('현재 선택된 퀴즈 문제를 삭제하시겠습니까?')) return;
-      socket.emit('delete_quiz', { quiz_id: selectedQuizId });
-    });
-  }
-
-  // 7) 현재 차시 전체 퀴즈 출제 취소 버튼
+  // 3) 현재 차시 전체 퀴즈 출제 취소 버튼
   const cancelBtn = document.getElementById('cancel-quiz-btn');
   if (cancelBtn) {
     cancelBtn.addEventListener('click', () => {
@@ -894,7 +925,6 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       activeQuizzes.push(quiz);
     }
-    selectedQuizId = quiz.id;
     renderProfessorQuizDashboard();
   });
 
@@ -935,7 +965,6 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       activeQuizzes.push(quiz);
     }
-    selectedQuizId = quiz.id;
     renderProfessorQuizDashboard();
   });
 
@@ -945,15 +974,41 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!data || !data.quiz_id) return;
     activeQuizzes = activeQuizzes.filter(q => q.id !== data.quiz_id);
     delete quizStats[data.quiz_id];
+    if (activeQuizFilter === data.quiz_id) {
+      activeQuizFilter = 'ALL';
+    }
     renderProfessorQuizDashboard();
   });
 
-  // 소켓 이벤트: 실시간 통계 수신
+  // 소켓 이벤트: 실시간 개별 문제 통계 수신 (동시 화면 차트 즉시 갱신)
   socket.on('update_quiz_stats', (statsData) => {
     console.log('[Professor] update_quiz_stats:', statsData);
     if (!statsData || !statsData.quiz_id) return;
     quizStats[statsData.quiz_id] = statsData;
-    renderProfessorQuizDashboard();
+
+    // 1) 해당 문제 카드의 응답자 수 즉각 갱신
+    const countEl = document.getElementById(`quizResponseCount_${statsData.quiz_id}`);
+    if (countEl) {
+      countEl.innerText = statsData.total_responses || 0;
+    }
+
+    // 2) 탭 바의 뱃지 갱신
+    const tabBadgeEl = document.getElementById(`tabBadge_${statsData.quiz_id}`);
+    if (tabBadgeEl) {
+      tabBadgeEl.innerText = `공개 ${statsData.total_responses || 0}명`;
+    }
+
+    // 3) 해당 문제의 막대그래프 차트 데이터 즉각 애니메이션 갱신
+    const chart = quizChartsMap[statsData.quiz_id];
+    if (chart && chart.data) {
+      const q = activeQuizzes.find(item => item.id === statsData.quiz_id);
+      const opts = (q && q.options) || ['보기 1', '보기 2', '보기 3', '보기 4'];
+      const sMap = statsData.stats || {};
+      chart.data.datasets[0].data = opts.map((_, i) => sMap[i] || 0);
+      chart.update();
+    } else {
+      renderProfessorQuizDashboard();
+    }
   });
 
   // 소켓 이벤트: clear_quiz
