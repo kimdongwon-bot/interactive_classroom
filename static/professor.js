@@ -190,7 +190,11 @@ document.addEventListener('DOMContentLoaded', () => {
     currentSession = sessionSelect.value;
     currentSessionDisplay.innerText = currentSession;
     analysisTargetSession.innerText = currentSession;
+    activeQuizFilter = 'ALL';
     fetchGraphData();
+    if (typeof renderProfessorQuizDashboard === 'function') {
+      renderProfessorQuizDashboard();
+    }
 
     if (currentSession !== '전체') {
       try {
