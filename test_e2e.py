@@ -35,6 +35,14 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
 
         # 테스트용 데이터 초기화
         save_data(init_default_data())
+        from app import sync_quizzes_from_storage
+        sync_quizzes_from_storage()
+
+    def get_professor_socket(self):
+        prof_client = self.app.test_client()
+        with prof_client.session_transaction() as sess:
+            sess['is_professor'] = True
+        return socketio.test_client(self.app, flask_test_client=prof_client)
 
     def test_1_http_routes_and_pin_auth(self):
         print("\n--- [Test 1] HTTP 라우트 및 교수 PIN 인증 테스트 ---")
@@ -178,7 +186,7 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
     def test_5_cancel_quiz_flow(self):
         print("\n--- [Test 5] 퀴즈 출제 취소 및 학생 화면 초기화 테스트 ---")
         student_socket = socketio.test_client(self.app)
-        prof_socket = socketio.test_client(self.app)
+        prof_socket = self.get_professor_socket()
 
         # 1. 교수 퀴즈 출제
         quiz_data = {
@@ -227,7 +235,7 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
         print("  ✓ 교수 활성 과목 전환(회계감사) -> 학생 session_changed 수신 확인")
 
         # 2. 퀴즈 출제 후 /api/courses 및 /api/current_quiz 검증
-        prof_socket = socketio.test_client(self.app)
+        prof_socket = self.get_professor_socket()
         quiz_data = {
             "course": "회계감사",
             "session": "1주차",
@@ -368,7 +376,7 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
 
     def test_8_quiz_course_and_session_isolation(self):
         print("\n--- [Test 8] 퀴즈 특정 과목 및 차시(세션) 격리 페이로드 검증 ---")
-        prof_socket = socketio.test_client(self.app)
+        prof_socket = self.get_professor_socket()
         student_socket = socketio.test_client(self.app)
 
         # 1. 원가회계 1차시에 퀴즈 출제
@@ -406,7 +414,7 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
 
     def test_9_multi_quiz_per_session_and_stats(self):
         print("\n--- [Test 9] 동일 차시 내 다중 퀴즈 출제 및 문제별 개별 통계 검증 ---")
-        prof_socket = socketio.test_client(self.app)
+        prof_socket = self.get_professor_socket()
         student_socket = socketio.test_client(self.app)
 
         # 1. 원가회계 1주차에 문제 1 출제
@@ -493,7 +501,7 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
 
     def test_10_quiz_draft_and_stepwise_publishing(self):
         print("\n--- [Test 10] 문제 임시 저장 및 단계별 학생 공개 기능 검증 ---")
-        prof_socket = socketio.test_client(self.app)
+        prof_socket = self.get_professor_socket()
         student_socket = socketio.test_client(self.app)
 
         # 1. 교수가 문제 2건(A, B)을 임시 저장 (save_draft_quiz)
@@ -607,7 +615,7 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
         print("  ✓ 수업자료 상태 조회 API (/api/material_info) 연동 확인")
 
         # 3. 퀴즈 데이터 및 학생 피드백 준비
-        prof_socket = socketio.test_client(self.app)
+        prof_socket = self.get_professor_socket()
         student_socket = socketio.test_client(self.app)
 
         prof_socket.emit('send_quiz', {
@@ -649,7 +657,7 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
 
     def test_12_student_self_study_ai_report(self):
         print("\n--- [Test 12] 학생 자가학습 맞춤형 AI 분석보고서 발행 및 실시간 배포 검증 ---")
-        prof_socket = socketio.test_client(self.app)
+        prof_socket = self.get_professor_socket()
         student_socket = socketio.test_client(self.app)
 
         with self.client.session_transaction() as sess:
@@ -719,7 +727,7 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
         with self.client.session_transaction() as sess:
             sess['is_professor'] = True
 
-        prof_socket = socketio.test_client(self.app)
+        prof_socket = self.get_professor_socket()
         student_socket = socketio.test_client(self.app)
 
         # 1. 원가회계 2주차 임시 저장 퀴즈 등록
@@ -847,6 +855,145 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
         audit_w1 = [q for q in quizzes if (q.get('course') or '').strip() == '회계감사']
         self.assertEqual(len(audit_w1), 0)
         print("  ✓ 타 과목(회계감사) 선택 시 원가회계 퀴즈가 누출되지 않고 0건으로 엄격 격리 확인")
+
+    def test_15_security_and_data_integrity(self):
+        print("\n--- [Test 15] 보안 권한 검증, 정답 유출 방지 및 데이터 무결성 테스트 ---")
+        student_socket = socketio.test_client(self.app)
+        prof_socket = self.get_professor_socket()
+
+        # 1. PIN 실패 메시지 보안 검증 (기본 힌트 노출 차단)
+        res_fail = self.client.post('/login_professor', json={'pin': '0000'})
+        self.assertEqual(res_fail.status_code, 401)
+        fail_msg = json.loads(res_fail.data).get('message', '')
+        self.assertNotIn('2528', fail_msg, "PIN 실패 메시지에 기본 PIN 번호가 노출되어서는 안 됩니다.")
+        print("  ✓ PIN 인증 실패 시 기본 PIN 힌트 은폐 검증 통과")
+
+        # 2. 비인가 학생 소켓의 교수 전용 소켓 이벤트 차단 검증
+        # 먼저 교수가 정식 퀴즈 1건 출제
+        prof_socket.emit('send_quiz', {
+            "id": "quiz_legit",
+            "course": "원가회계",
+            "session": "1주차",
+            "question": "교수 정규 퀴즈",
+            "options": ["A", "B"],
+            "answer": 0,
+            "is_published": True
+        })
+
+        unauth_quiz = {
+            "id": "hacker_quiz",
+            "course": "원가회계",
+            "session": "1주차",
+            "question": "해킹 퀴즈",
+            "options": ["A", "B"],
+            "answer": 0,
+            "is_published": True
+        }
+        student_socket.emit('send_quiz', unauth_quiz)
+        student_socket.emit('save_draft_quiz', unauth_quiz)
+        student_socket.emit('publish_quiz', {'quiz_id': 'hacker_quiz'})
+        student_socket.emit('delete_quiz', {'quiz_id': 'quiz_legit'})
+
+        # 비인가 학생이 보낸 퀴즈가 등록되지 않고 기존 퀴즈도 삭제되지 않았는지 확인
+        from app import load_data
+        data = load_data()
+        all_ids = [q['id'] for q in data['courses']['원가회계'].get('quizzes', [])]
+        self.assertNotIn('hacker_quiz', all_ids, "비인가 학생 소켓의 퀴즈 출제/임시저장은 거부되어야 합니다.")
+        self.assertIn('quiz_legit', all_ids, "비인가 학생 소켓의 퀴즈 삭제는 거부되어야 합니다.")
+        print("  ✓ 비인가 학생 소켓의 교수 전용 이벤트(출제, 저장, 삭제 등) 철저 차단 확인")
+
+        # 3. 정답(answer) 및 해설(explanation) 유출 방지 검증 (학생 API 및 소켓 브로드캐스트)
+        prof_quiz = {
+            "id": "quiz_sec_test",
+            "course": "원가회계",
+            "session": "1주차",
+            "question": "보안 테스트 퀴즈입니다.",
+            "options": ["1번", "2번", "3번", "4번"],
+            "answer": 2,
+            "explanation": "3번이 정답인 극비 해설입니다.",
+            "is_published": True
+        }
+        prof_socket.emit('send_quiz', prof_quiz)
+
+        # 학생 소켓이 수신한 이벤트 페이로드 검사
+        received = student_socket.get_received()
+        added_events = [e for e in received if e['name'] in ('send_quiz', 'receive_quiz', 'quiz_added')]
+        self.assertTrue(len(added_events) > 0)
+        stud_payload = added_events[-1]['args'][0]
+        self.assertNotIn('answer', stud_payload, "학생 소켓으로 브로드캐스트되는 퀴즈에 answer가 포함되어서는 안 됩니다.")
+        self.assertNotIn('explanation', stud_payload, "학생 소켓으로 브로드캐스트되는 퀴즈에 explanation이 포함되어서는 안 됩니다.")
+
+        # 학생 권한으로 /api/courses 및 /api/current_quiz 조회 시 answer/explanation 은폐 검증
+        with self.client.session_transaction() as sess:
+            sess['is_professor'] = False
+        res_stud_quiz = self.client.get('/api/current_quiz')
+        stud_data = json.loads(res_stud_quiz.data)
+        for q in stud_data.get('active_quizzes', []):
+            self.assertNotIn('answer', q, "학생 /api/current_quiz 응답에 answer가 노출되어서는 안 됩니다.")
+            self.assertNotIn('explanation', q, "학생 /api/current_quiz 응답에 explanation이 노출되어서는 안 됩니다.")
+
+        # 교수 권한으로 /api/current_quiz 조회 시에는 answer/explanation 정상 확인
+        with self.client.session_transaction() as sess:
+            sess['is_professor'] = True
+        res_prof_quiz = self.client.get('/api/current_quiz')
+        prof_data = json.loads(res_prof_quiz.data)
+        found_prof_q = next((q for q in prof_data.get('active_quizzes', []) if q.get('id') == 'quiz_sec_test'), None)
+        self.assertIsNotNone(found_prof_q)
+        self.assertEqual(found_prof_q.get('answer'), 2)
+        self.assertEqual(found_prof_q.get('explanation'), "3번이 정답인 극비 해설입니다.")
+        print("  ✓ 학생 대상 API 및 웹소켓 정답/해설 은폐 & 교수 권한 정상 조회 검증 통과")
+
+        # 4. 서버 사이드 자동 채점 및 결과 피드백(quiz_answer_result) 검증
+        # (1) 정답 제출 (2번 인덱스)
+        student_socket.emit('submit_quiz_answer', {
+            'quiz_id': 'quiz_sec_test',
+            'selected_option': 2
+        })
+        res_events = [e for e in student_socket.get_received() if e['name'] == 'quiz_answer_result']
+        self.assertTrue(len(res_events) > 0, "답안 제출 시 학생 소켓에 quiz_answer_result 이벤트가 도달해야 합니다.")
+        result_payload = res_events[-1]['args'][0]
+        self.assertTrue(result_payload['is_correct'], "정답 제출 시 is_correct는 True여야 합니다.")
+        self.assertEqual(result_payload['correct_answer'], 2)
+        self.assertEqual(result_payload['explanation'], "3번이 정답인 극비 해설입니다.")
+
+        # (2) 오답 제출 (1번 인덱스)
+        student_socket.emit('submit_quiz_answer', {
+            'quiz_id': 'quiz_sec_test',
+            'selected_option': 1
+        })
+        res_events_wrong = [e for e in student_socket.get_received() if e['name'] == 'quiz_answer_result']
+        self.assertTrue(len(res_events_wrong) > 0)
+        wrong_payload = res_events_wrong[-1]['args'][0]
+        self.assertFalse(wrong_payload['is_correct'], "오답 제출 시 is_correct는 False여야 합니다.")
+        self.assertEqual(wrong_payload['correct_answer'], 2)
+        print("  ✓ 서버 사이드 자동 채점 및 학생 전용 정답/해설 피드백(quiz_answer_result) 검증 통과")
+
+        # 5. 유효하지 않은 퀴즈 ID 제출 시 안전한 거부 검증 (위험한 active_quizzes[-1] 폴백 방지)
+        student_socket.emit('submit_quiz_answer', {
+            'quiz_id': 'completely_nonexistent_id',
+            'selected_option': 0
+        })
+        invalid_res = [e for e in student_socket.get_received() if e['name'] == 'quiz_answer_result']
+        self.assertEqual(len(invalid_res), 0, "존재하지 않는 퀴즈 ID 제출 시 처리가 거부되어야 합니다.")
+        print("  ✓ 존재하지 않는 퀴즈 ID 제출 시 엉뚱한 문제로 폴백되지 않고 안전 거부 확인")
+
+        # 6. 문제 내용 수정 및 과목/주차 변경 시 기존 학생 답안(answers) 보존 검증
+        prof_socket.emit('update_quiz', {
+            'id': 'quiz_sec_test',
+            'question': '수정된 보안 테스트 질문입니다.',
+            'answer': 2,
+            'explanation': '수정된 해설'
+        })
+        data_after_update = load_data()
+        updated_q = next((q for q in data_after_update['courses']['원가회계'].get('quizzes', []) if q['id'] == 'quiz_sec_test'), None)
+        self.assertIsNotNone(updated_q)
+        self.assertEqual(len(updated_q.get('answers', [])), 2, "문제 수정 시에도 누적된 학생 답안 이력은 유실 없이 보존되어야 합니다.")
+        print("  ✓ 문제 수정 시 누적 제출 답안(answers) 데이터 영구 보존 확인")
+
+        # 정리
+        prof_socket.emit('delete_quiz', {'quiz_id': 'quiz_sec_test'})
+        student_socket.disconnect()
+        prof_socket.disconnect()
 
 if __name__ == '__main__':
     unittest.main()

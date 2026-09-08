@@ -275,8 +275,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 3. 실시간 퀴즈 수신 및 답안 제출 (동일 차시 다중 문제 지원 & 완벽 격리)
   let activeQuizzes = [];
-  // 학생 답안 상태: key = quiz_id (또는 `${course}_${session}_${question}`) -> { selectedIndex, isCorrect }
-  const answeredQuizzesStore = {};
+  // 학생 답안 상태: key = quiz_id (또는 `${course}_${session}_${question}`) -> { selectedIndex, isCorrect, correctAnswer, explanation }
+  let answeredQuizzesStore = {};
+  try {
+    const cachedStore = localStorage.getItem('student_answered_quizzes');
+    if (cachedStore) answeredQuizzesStore = JSON.parse(cachedStore);
+  } catch (e) {
+    console.warn('저장된 답안 캐시 로드 오류:', e);
+  }
+
+  function saveAnsweredStore() {
+    try {
+      localStorage.setItem('student_answered_quizzes', JSON.stringify(answeredQuizzesStore));
+    } catch (e) {}
+  }
 
   function getQuizId(quiz) {
     if (!quiz) return '';
@@ -291,6 +303,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const qCourse = (q.course || '').trim();
       const qSession = (q.session || '').trim();
       const currCourse = (selectedCourse || '').trim();
+      const currSession = (selectedSession || '').trim();
       if (!qCourse || !qSession) return false;
       const courseMatches = (qCourse === currCourse);
       const sessionMatches = (qSession === currSession);
@@ -334,7 +347,11 @@ document.addEventListener('DOMContentLoaded', () => {
         let badgeText = '';
 
         if (isAnswered) {
-          if (optIdx === parseInt(quiz.answer)) {
+          const correctIdx = savedAnswer.correctAnswer !== null && savedAnswer.correctAnswer !== undefined
+            ? parseInt(savedAnswer.correctAnswer, 10)
+            : (quiz.answer !== undefined ? parseInt(quiz.answer, 10) : null);
+
+          if (correctIdx !== null && optIdx === correctIdx) {
             extraClass = ' correct';
             badgeText = ' <b>(정답 ✓)</b>';
           } else if (optIdx === savedAnswer.selectedIndex) {
@@ -352,16 +369,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
       let resultHtml = '';
       if (isAnswered) {
-        if (savedAnswer.isCorrect) {
+        const correctIdx = savedAnswer.correctAnswer !== null && savedAnswer.correctAnswer !== undefined
+          ? parseInt(savedAnswer.correctAnswer, 10)
+          : (quiz.answer !== undefined ? parseInt(quiz.answer, 10) : null);
+        const explanationText = savedAnswer.explanation || quiz.explanation || '';
+
+        if (savedAnswer.isCorrect === true) {
           resultHtml = `
             <div style="margin-top: 0.6rem; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem; background-color: #dcfce7; color: #15803d;">
-              <b>🎉 정답입니다!</b><br>${escapeHtml(quiz.explanation || '')}
+              <b>🎉 정답입니다!</b>${explanationText ? `<br>${escapeHtml(explanationText)}` : ''}
+            </div>
+          `;
+        } else if (savedAnswer.isCorrect === false) {
+          const ansLabel = correctIdx !== null ? ` (정답: ${correctIdx + 1}번)` : '';
+          resultHtml = `
+            <div style="margin-top: 0.6rem; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem; background-color: #fee2e2; color: #b91c1c;">
+              <b>오답입니다.</b>${ansLabel}${explanationText ? `<br>${escapeHtml(explanationText)}` : ''}
             </div>
           `;
         } else {
           resultHtml = `
-            <div style="margin-top: 0.6rem; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem; background-color: #fee2e2; color: #b91c1c;">
-              <b>오답입니다.</b> (정답: ${parseInt(quiz.answer) + 1}번)<br>${escapeHtml(quiz.explanation || '')}
+            <div style="margin-top: 0.6rem; padding: 0.6rem; border-radius: 6px; font-size: 0.85rem; background-color: #f1f5f9; color: #334155;">
+              <b>답안이 제출되었습니다.</b>
             </div>
           `;
         }
@@ -407,13 +436,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const quiz = activeQuizzes.find(q => getQuizId(q) === quizId);
     if (!quiz) return;
 
-    if (answeredQuizzesStore[quizId]) return;
+    if (answeredQuizzesStore[quizId] && answeredQuizzesStore[quizId].isCorrect !== undefined && answeredQuizzesStore[quizId].isCorrect !== null) return;
 
-    const isCorrect = (selectedIndex === parseInt(quiz.answer));
+    const isCorrect = (quiz.answer !== undefined && quiz.answer !== null)
+      ? (selectedIndex === parseInt(quiz.answer, 10))
+      : null;
+
     answeredQuizzesStore[quizId] = {
       selectedIndex: selectedIndex,
-      isCorrect: isCorrect
+      isCorrect: isCorrect,
+      correctAnswer: (quiz.answer !== undefined && quiz.answer !== null) ? parseInt(quiz.answer, 10) : null,
+      explanation: quiz.explanation || ''
     };
+    saveAnsweredStore();
 
     socket.emit('submit_quiz_answer', {
       quiz_id: quiz.id,
@@ -424,6 +459,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
     updateQuizDisplay(false);
   }
+
+  // 소켓 이벤트: 서버 채점 결과 수신
+  socket.on('quiz_answer_result', (res) => {
+    console.log('[Student] quiz_answer_result:', res);
+    if (!res || !res.quiz_id) return;
+    let targetKey = res.quiz_id;
+    if (!answeredQuizzesStore[targetKey]) {
+      const q = activeQuizzes.find(item => item.id === res.quiz_id);
+      if (q) {
+        const altKey = getQuizId(q);
+        if (answeredQuizzesStore[altKey]) targetKey = altKey;
+      }
+    }
+    const current = answeredQuizzesStore[targetKey] || {};
+    answeredQuizzesStore[targetKey] = {
+      ...current,
+      selectedIndex: (current.selectedIndex !== undefined) ? current.selectedIndex : res.selected_option,
+      isCorrect: res.is_correct,
+      correctAnswer: (res.correct_answer !== undefined && res.correct_answer !== null) ? parseInt(res.correct_answer, 10) : null,
+      explanation: res.explanation || current.explanation || ''
+    };
+    saveAnsweredStore();
+    updateQuizDisplay(false);
+  });
 
   // 소켓 이벤트: 활성 퀴즈 전체 갱신 (공개된 퀴즈만 보관)
   socket.on('active_quizzes_updated', (data) => {

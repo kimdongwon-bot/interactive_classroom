@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
   socket.on('connect', () => {
     profConnStatus.className = 'status-badge online';
     profConnStatus.innerText = '실시간 연결됨';
+    socket.emit('join_professor_room');
   });
 
   socket.on('disconnect', () => {
