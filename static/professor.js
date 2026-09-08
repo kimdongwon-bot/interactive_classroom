@@ -126,6 +126,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (typeof renderProfessorQuizDashboard === 'function') {
         renderProfessorQuizDashboard();
       }
+      if (typeof fetchMaterialInfo === 'function') {
+        fetchMaterialInfo();
+      }
     } catch (err) {
       console.error('과목 정보 로드 오류:', err);
     }
@@ -171,6 +174,9 @@ document.addEventListener('DOMContentLoaded', () => {
     updateSessionDropdown();
     fetchGraphData();
     updateCumulativeStats();
+    if (typeof fetchMaterialInfo === 'function') {
+      fetchMaterialInfo();
+    }
 
     // 교수 화면에서 과목 변경 시 서버 활성 과목 및 학생 화면에 자동 동기화
     try {
@@ -194,6 +200,9 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchGraphData();
     if (typeof renderProfessorQuizDashboard === 'function') {
       renderProfessorQuizDashboard();
+    }
+    if (typeof fetchMaterialInfo === 'function') {
+      fetchMaterialInfo();
     }
 
     if (currentSession !== '전체') {
@@ -530,7 +539,106 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // 8. 실시간 세션 분석 및 퀴즈 출제
+  // --- 7.5. 이번 주차 수업자료(PDF/PPT) 관리 로직 ---
+  const materialCourseDisplay = document.getElementById('materialCourseDisplay');
+  const materialSessionDisplay = document.getElementById('materialSessionDisplay');
+  const materialFileInput = document.getElementById('materialFileInput');
+  const selectMaterialFileBtn = document.getElementById('selectMaterialFileBtn');
+  const deleteMaterialBtn = document.getElementById('deleteMaterialBtn');
+  const materialStatusText = document.getElementById('materialStatusText');
+  const materialUploadProgress = document.getElementById('materialUploadProgress');
+
+  function updateMaterialHeader() {
+    if (materialCourseDisplay) materialCourseDisplay.innerText = currentCourse;
+    if (materialSessionDisplay) materialSessionDisplay.innerText = currentSession;
+  }
+
+  async function fetchMaterialInfo() {
+    updateMaterialHeader();
+    if (!materialStatusText) return;
+    try {
+      const res = await fetch(`/api/material_info?course=${encodeURIComponent(currentCourse)}&session=${encodeURIComponent(currentSession)}`);
+      const data = await res.json();
+      if (data.has_material) {
+        materialStatusText.innerHTML = `
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <span style="color: #15803d; background: #dcfce7; border: 1px solid #bbf7d0; padding: 2px 8px; border-radius: 4px; font-size: 0.78rem; font-weight: 700;">✓ 교안 등록 완료</span>
+            <b style="color: #0f172a; font-size: 0.9rem;">📄 ${escapeHtml(data.filename)}</b>
+            <span style="color: var(--text-muted); font-size: 0.8rem;">(총 ${data.total_units}장 분석됨 · ${data.uploaded_at})</span>
+          </div>
+        `;
+        if (deleteMaterialBtn) deleteMaterialBtn.style.display = 'inline-flex';
+        if (selectMaterialFileBtn) selectMaterialFileBtn.innerText = '🔄 교안 파일 변경';
+      } else {
+        materialStatusText.innerHTML = `⚠️ [${currentCourse} - ${currentSession}] 등록된 수업자료가 없습니다. PDF나 PPT 교안을 업로드하시면 AI가 직접 학습합니다.`;
+        if (deleteMaterialBtn) deleteMaterialBtn.style.display = 'none';
+        if (selectMaterialFileBtn) selectMaterialFileBtn.innerText = '📤 수업자료(PDF/PPT) 업로드';
+      }
+    } catch (e) {
+      console.warn('수업자료 상태 조회 오류:', e);
+    }
+  }
+
+  if (selectMaterialFileBtn && materialFileInput) {
+    selectMaterialFileBtn.addEventListener('click', () => {
+      materialFileInput.click();
+    });
+
+    materialFileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('course', currentCourse);
+      formData.append('session', currentSession);
+
+      if (materialUploadProgress) materialUploadProgress.style.display = 'inline-block';
+      if (selectMaterialFileBtn) selectMaterialFileBtn.disabled = true;
+
+      try {
+        const res = await fetch('/api/upload_material', {
+          method: 'POST',
+          body: formData
+        });
+        const result = await res.json();
+        if (result.success) {
+          alert(`[${currentCourse} - ${currentSession}] 수업자료('${result.material.filename}')가 성공적으로 등록 및 분석되었습니다!\n이제 [AI 종합 분석 보고서 생성] 버튼을 누르면 이 교안을 바탕으로 정밀 분석이 수행됩니다.`);
+          fetchMaterialInfo();
+        } else {
+          alert(`업로드 실패: ${result.error || '알 수 없는 오류'}`);
+        }
+      } catch (err) {
+        alert('파일 업로드 중 오류가 발생했습니다.');
+      } finally {
+        if (materialUploadProgress) materialUploadProgress.style.display = 'none';
+        if (selectMaterialFileBtn) selectMaterialFileBtn.disabled = false;
+        materialFileInput.value = '';
+      }
+    });
+  }
+
+  if (deleteMaterialBtn) {
+    deleteMaterialBtn.addEventListener('click', async () => {
+      if (!confirm(`[${currentCourse} - ${currentSession}] 등록된 수업자료를 삭제하시겠습니까?`)) return;
+      try {
+        const res = await fetch('/api/delete_material', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ course: currentCourse, session: currentSession })
+        });
+        const result = await res.json();
+        if (result.success) {
+          alert('수업자료가 삭제되었습니다.');
+          fetchMaterialInfo();
+        }
+      } catch (err) {
+        console.warn('자료 삭제 오류:', err);
+      }
+    });
+  }
+
+  // 8. 실시간 세션 종합 분석 (수업자료 + 채점결과 + 피드백)
   const analyzeBtn = document.getElementById('analyzeOpinionsBtn');
   const analysisCard = document.getElementById('analysisResultCard');
   const analysisContent = document.getElementById('analysisContent');
@@ -539,9 +647,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   analyzeBtn.addEventListener('click', async () => {
     analyzeBtn.disabled = true;
-    analyzeBtn.innerText = '세션 분석 진행 중... ⏳';
+    analyzeBtn.innerText = '수업자료·채점결과·피드백 3중 결합 분석 중... ⏳';
     analysisCard.classList.add('active');
-    analysisContent.innerText = `[${currentCourse} - ${currentSession}] 학생 피드백을 분석 중입니다...`;
+    analysisContent.innerText = `[${currentCourse} - ${currentSession}] 주차별 수업자료와 퀴즈 채점 결과, 학생 피드백을 결합 분석 중입니다... 잠시만 기다려 주세요.`;
 
     try {
       const res = await fetch('/api/analyze_opinions', {
@@ -560,12 +668,15 @@ document.addEventListener('DOMContentLoaded', () => {
       if (data.recommended_quiz) {
         lastSuggestedQuiz = data.recommended_quiz;
         applyQuizBtn.style.display = 'inline-flex';
+      } else {
+        applyQuizBtn.style.display = 'none';
       }
+      analysisCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (err) {
-      analysisContent.innerText = '분석 도중 오류 발생';
+      analysisContent.innerText = '분석 도중 오류가 발생했습니다.';
     } finally {
       analyzeBtn.disabled = false;
-      analyzeBtn.innerHTML = '<span>✨</span> 현재 세션 피드백 AI 분석';
+      analyzeBtn.innerHTML = '<span>✨</span> AI 종합 분석 보고서 생성';
     }
   });
 

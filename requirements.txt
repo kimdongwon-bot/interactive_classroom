@@ -4,3 +4,5 @@ python-dotenv>=1.0.0
 google-generativeai>=0.8.0
 simple-websocket>=1.0.0
 requests>=2.31.0
+pypdf>=5.0.0
+python-pptx>=1.0.0

@@ -62,54 +62,219 @@ class AITutor:
         # API 호출 실패 또는 미설정 시 안전한 도메인 특화 폴백 응답
         return self._generate_fallback_response(user_question)
 
-    def analyze_opinions(self, opinions: list) -> dict:
+    def analyze_session_comprehensive(
+        self,
+        course_name: str,
+        session_name: str,
+        material_data: dict,
+        quizzes_data: list,
+        opinions: list
+    ) -> dict:
         """
-        학생들이 제출한 의견 목록을 분석하여 '다음 수업을 위한 제안'과 '추천 퀴즈'를 생성합니다.
+        [1. 주차별 수업자료 내용] + [2. 문제 채점 결과 및 선택지별 학생 분포] + [3. 학생 실시간 피드백]을
+        종합 분석하여 (1) 학생들을 위한 맞춤형 학습 제안과 (2) 교수자를 위한 다음 강의 제안을 생성합니다.
         """
-        if not opinions:
-            return {
-                "summary": "아직 제출된 학생 의견이 없습니다. 수업 중 학생들의 피드백을 수집해 보세요.",
-                "difficulties": "수집된 피드백 없음",
-                "suggestions": "학생들에게 실시간 이해도 투표를 독려해 주세요.",
-                "recommended_quiz": {
-                    "question": "다음 중 원가회계에서 고정원가(Fixed Cost)의 특성으로 옳은 것은?",
-                    "options": [
-                        "조업도가 증가할 때 총원가도 증가한다",
-                        "조업도가 증가할 때 단위당 고정원가는 감소한다",
-                        "조업도 변동과 무관하게 단위당 고정원가는 일정하다",
-                        "직접재료원가가 대표적인 고정원가이다"
-                    ],
-                    "answer": 1,
-                    "explanation": "총고정원가는 일정하지만 조업도가 커질수록 단위당 고정원가는 감소합니다."
-                }
-            }
+        prompt_parts = []
+        prompt_parts.append(f"[과목명]: {course_name}")
+        prompt_parts.append(f"[강의시간/주차]: {session_name}")
 
-        opinions_text = "\n".join([f"- [{op.get('category', '일반')}] {op.get('text', '')}" for op in opinions[-30:]])
+        # 1. 수업자료 내용 요약
+        if material_data and material_data.get("full_text"):
+            fn = material_data.get("filename", "수업교안")
+            total_u = material_data.get("total_units", 1)
+            text_snippet = material_data.get("full_text")[:3500]
+            prompt_parts.append(f"\n[1. 교수 제공 이번 주차 수업자료 내용 (파일명: {fn}, 총 {total_u}페이지/슬라이드)]:\n{text_snippet}")
+        else:
+            prompt_parts.append(f"\n[1. 교수 제공 수업자료]: 등록된 교안 파일 없음 ({course_name} {session_name} 표준 전공 커리큘럼 기준 분석)")
 
-        prompt = (
-            f"다음은 대학 회계/ESG 수업 중 학생들이 제출한 실시간 의견 및 피드백 목록입니다:\n\n"
-            f"{opinions_text}\n\n"
-            f"위 학생들의 의견을 종합 분석하여 교수님께 다음 사항을 제공해 주세요:\n"
-            f"1. [이해도 종합 요약]: 학생들이 수업을 얼마나 이해하고 있는지 전반적 분위기\n"
-            f"2. [핵심 난점 및 질문 요약]: 학생들이 가장 헷갈려하거나 보충이 필요한 주제\n"
-            f"3. [다음 수업을 위한 구체적 제안]: 교수님이 바로 적용할 수 있는 강의/설명 개선안\n"
-            f"4. [수업 확인용 퀴즈 추천 1개]: 학생들의 이해도를 점검할 수 있는 4지선다형 퀴즈 (문제, 보기 4개, 정답 번호, 해설)"
+        # 2. 퀴즈 채점 결과 및 선택지별 학생 분포
+        prompt_parts.append(f"\n[2. 이번 주차 실시간 퀴즈 및 학생 채점 결과 (총 {len(quizzes_data)}문제)]:")
+        if quizzes_data:
+            for idx, q in enumerate(quizzes_data, 1):
+                ans_idx = int(q.get("answer", 0))
+                options = q.get("options", [])
+                stats = q.get("stats", {})
+                total_resp = q.get("total_responses", 0)
+                correct_count = stats.get(ans_idx, 0)
+                correct_rate = f"{(correct_count / total_resp * 100):.1f}%" if total_resp > 0 else "응답 없음"
+
+                q_lines = [
+                    f"■ 문제 {idx}: {q.get('question')}",
+                    f"  - 총 응답자: {total_resp}명 (정답률: {correct_rate})"
+                ]
+                for opt_i, opt_text in enumerate(options):
+                    is_ans = " (★정답)" if opt_i == ans_idx else ""
+                    cnt = stats.get(opt_i, 0)
+                    pct = f"({(cnt / total_resp * 100):.1f}%)" if total_resp > 0 else ""
+                    q_lines.append(f"    보기 {opt_i+1}{is_ans}: {opt_text} -> {cnt}명 선택 {pct}")
+                if q.get("explanation"):
+                    q_lines.append(f"  - 정답 해설: {q.get('explanation')}")
+                prompt_parts.append("\n".join(q_lines))
+        else:
+            prompt_parts.append("  (이번 차시에 출제된 퀴즈 없음)")
+
+        # 3. 학생 실시간 피드백
+        prompt_parts.append(f"\n[3. 학생 실시간 피드백 (총 {len(opinions)}건)]:")
+        if opinions:
+            cat_counts = {}
+            for op in opinions:
+                c = op.get("category", "기타")
+                cat_counts[c] = cat_counts.get(c, 0) + 1
+            prompt_parts.append(f"  - 이해도 분포: {cat_counts}")
+            prompt_parts.append("  - 주요 학생 의견 및 질문 목록:")
+            for op in opinions[:20]:
+                if op.get("text"):
+                    prompt_parts.append(f"    * [{op.get('category')}] {op.get('text')}")
+        else:
+            prompt_parts.append("  (접수된 실시간 피드백 없음)")
+
+        prompt_body = "\n".join(prompt_parts)
+
+        full_prompt = (
+            f"[지침: 당신은 대학 {course_name} 전공 전문 수석 교육 컨설턴트 및 AI 학습 코치입니다.]\n\n"
+            f"위에서 제공된 '{course_name} {session_name}'의 ① 실제 수업자료 교안 내용, ② 문제별 채점 결과 및 오답 선택지 분포, ③ 학생들의 실시간 피드백을 유기적으로 결합하여 심도 있는 분석 보고서를 작성하세요.\n\n"
+            f"교수님의 요구에 따라 보고서는 반드시 아래 2개 대단원 순서대로 구체적이고 전문적으로 작성해야 합니다:\n\n"
+            f"### 1. 🎓 학생들을 위한 맞춤형 학습 제안 (최우선 작성)\n"
+            f"출제된 퀴즈 문제별로 아래 두 그룹을 명확히 분리하여 구체적인 학습 방향을 제시하세요:\n"
+            f"- ✅ **정답을 맞힌 학생들을 위한 심화 학습 가이드**: 이번 주차 수업자료의 해당 개념을 상위 이론 및 실무 사례와 연결하여 더 깊이 있게 탐구할 수 있는 심화 질문/과제 제안\n"
+            f"- ❌ **정답을 맞히지 못한(오답을 선택한) 학생들을 위한 맞춤 복습 가이드**: 학생들이 가장 많이 선택한 오답 보기의 매력적인 함정을 분석하고, 이번 수업자료(슬라이드/단원)의 어떤 개념과 수식을 다시 정독해야 하는지 구체적인 복습 포인트 제시\n\n"
+            f"### 2. 👨‍🏫 교수자를 위한 다음 강의 개선 제안\n"
+            f"- 🔍 **다음 강의 차시 시작 시 5분 필수 보충 설명 사항**: 이번 수업자료 중 학생들이 오답을 많이 냈거나 피드백에서 어려움을 호소한 핵심 개념에 대해 다음 수업 첫머리에 칠판이나 슬라이드로 꼭 짚어주어야 할 내용\n"
+            f"- 💡 **학생 피드백 기반 강의 전달 방식 개선안**: 학생들이 남긴 구체적 건의사항을 반영한 설명 방식 개선 가이드\n"
+            f"- 🎯 **확인용 보충 추천 퀴즈 1개**: 오답률이 높았던 개념을 학생들이 확실히 이해했는지 다음 시간에 점검할 수 있는 4지선다 퀴즈 (문제, 보기 4개, 정답, 해설)\n"
         )
 
         if self.client:
             try:
-                response = self.client.generate_content(prompt)
+                response = self.client.generate_content(full_prompt)
                 if response and response.text:
                     return {
                         "analysis_raw": response.text.strip(),
-                        "summary": "학생들의 실시간 피드백을 기반으로 AI 분석이 완료되었습니다.",
-                        "opinions_count": len(opinions)
+                        "summary": f"[{course_name} {session_name}] 수업자료·채점결과·피드백 3중 결합 AI 정밀 분석이 완료되었습니다.",
+                        "opinions_count": len(opinions),
+                        "quizzes_count": len(quizzes_data),
+                        "has_material": bool(material_data and material_data.get("full_text"))
                     }
             except Exception as e:
-                logger.error(f"의견 분석 중 Gemini API 오류: {e}")
+                logger.error(f"종합 세션 분석 중 Gemini API 오류: {e}")
 
         # 폴백 분석 생성
-        return self._generate_fallback_analysis(opinions)
+        return self._generate_fallback_comprehensive_analysis(course_name, session_name, material_data, quizzes_data, opinions)
+
+    def analyze_opinions(self, opinions: list) -> dict:
+        """기존 하위 호환성 유지용"""
+        return self.analyze_session_comprehensive("원가회계", "1주차", {}, [], opinions)
+
+    def _generate_fallback_comprehensive_analysis(
+        self,
+        course_name: str,
+        session_name: str,
+        material_data: dict,
+        quizzes_data: list,
+        opinions: list
+    ) -> dict:
+        has_mat = bool(material_data and material_data.get("full_text"))
+        mat_name = material_data.get("filename", "교안") if has_mat else None
+
+        report_lines = [
+            f"### 📊 [{course_name} - {session_name}] AI 정밀 학습 분석 및 강의 개선 리포트",
+            f"*(수업자료: {'📄 ' + mat_name if has_mat else '미등록(기본 커리큘럼 기준)'} | 퀴즈: {len(quizzes_data)}문제 | 학생 피드백: {len(opinions)}건)*\n",
+            "---",
+            "### 1. 🎓 학생들을 위한 맞춤형 학습 제안 (최우선 과제)"
+        ]
+
+        if quizzes_data:
+            for idx, q in enumerate(quizzes_data, 1):
+                ans_idx = int(q.get("answer", 0))
+                options = q.get("options", [])
+                stats = q.get("stats", {})
+                total_resp = q.get("total_responses", 0)
+                correct_cnt = stats.get(ans_idx, 0)
+                ans_text = options[ans_idx] if ans_idx < len(options) else f"보기 {ans_idx+1}"
+                rate_str = f"{(correct_cnt/total_resp*100):.1f}%" if total_resp > 0 else "집계 중"
+
+                # 가장 오답률 높은 보기 탐색
+                wrong_counts = {i: stats.get(i, 0) for i in range(len(options)) if i != ans_idx}
+                most_wrong_idx = max(wrong_counts, key=wrong_counts.get) if wrong_counts and max(wrong_counts.values()) > 0 else None
+                most_wrong_text = options[most_wrong_idx] if most_wrong_idx is not None and most_wrong_idx < len(options) else None
+
+                report_lines.append(f"\n#### 📌 [문제 {idx}] {q.get('question')} (정답: 보기 {ans_idx+1}, 정답률: {rate_str})")
+                
+                # 정답 학생 가이드
+                report_lines.append(f"- ✅ **정답을 맞힌 학생 ({correct_cnt}명)을 위한 심화 학습 가이드**:")
+                report_lines.append(f"  * 핵심 개념 '{ans_text}'의 기본 원리를 정확히 숙지했습니다.")
+                if "의사결정" in q.get('question', '') or "원가" in course_name:
+                    report_lines.append("  * **심화 과제**: 단순 분류를 넘어 실무 제조기업에서 기회원가와 매몰원가가 특수주문 수락 여부 의사결정(CVP 및 증분분석)에 미치는 실제 재무적 영향 계산을 연습해보세요.")
+                else:
+                    report_lines.append("  * **심화 과제**: 상위 챕터의 응용 사례 및 실제 기업 사업보고서 주석에 적용되는 원리를 심층 탐구해보세요.")
+
+                # 오답 학생 가이드
+                wrong_total = total_resp - correct_cnt
+                report_lines.append(f"- ❌ **정답을 맞히지 못한 학생 ({wrong_total}명)을 위한 맞춤 복습 가이드**:")
+                if most_wrong_text:
+                    report_lines.append(f"  * **함정 분석**: 오답자 중 다수가 **보기 {most_wrong_idx+1}번('{most_wrong_text}')**을 선택했습니다. 이 개념은 표면적으로 관련되어 보이지만, 본질적인 의사결정 관련성 기준에서 제외되는 차이점이 있습니다.")
+                report_lines.append(f"  * **복습 포인트**: {'수업자료 ' + mat_name + '의 핵심 슬라이드' if has_mat else '이번 주차 교재'}에서 정답 해설(_{q.get('explanation', ans_text)}_)을 반드시 다시 정독하고, 오답 노트에 '비관련원가와 관련원가의 식별 기준'을 3줄로 직접 정리해보세요.")
+        else:
+            report_lines.append("\n*(이번 차시에 출제된 퀴즈 채점 결과가 없습니다. 퀴즈를 출제하시면 문제별 정답자/오답자 분리 학습 가이드가 자동 생성됩니다.)*")
+
+        report_lines.append("\n---")
+        report_lines.append("### 2. 👨‍🏫 교수자를 위한 다음 강의 개선 제안")
+
+        report_lines.append(f"\n#### 🔍 [다음 강의 차시 시작 시 5분 필수 보충 설명 사항]")
+        if quizzes_data:
+            q_first = quizzes_data[0]
+            report_lines.append(f"- 이번 시간 퀴즈 중 정답률이 낮거나 혼동이 발생했던 **'{q_first.get('question')}'** 관련 개념을 다음 수업 도입부 5분간 칠판에 실무 예시와 함께 다시 한 번 대조해 주시면 학생들의 학습 결손을 완벽히 메울 수 있습니다.")
+        else:
+            report_lines.append(f"- 이번 차시 수업자료의 핵심 수식 및 정의를 다음 차시 시작 전 5분 복습 퀴즈로 가볍게 점검하는 것을 권장합니다.")
+
+        report_lines.append(f"\n#### 💡 [학생 피드백 기반 강의 전달 방식 개선안]")
+        if opinions:
+            hard_ops = [op.get('text') for op in opinions if op.get('category') in ['조금 어려움', '예제 필요', '질문 있음'] and op.get('text')]
+            if hard_ops:
+                report_lines.append(f"- 학생 피드백 중 **'{hard_ops[0]}'** 등의 질문/요청이 다수 접수되었습니다.")
+                report_lines.append("- 수식의 이론적 유도보다는 실제 제조기업의 비용 데이터 숫자를 대입한 계산 과정을 한 단계씩 풀어서 보여주시면 이해도가 크게 상승할 것입니다.")
+            else:
+                report_lines.append("- 전반적으로 긍정적인 이해도를 보이고 있으나, 실무 적용 사례를 한 가지 더 추가해 주시면 높은 만족도를 유지할 수 있습니다.")
+        else:
+            report_lines.append("- 실시간 피드백 수집을 지속하여 학생들의 체감 난이도 변동을 모니터링하세요.")
+
+        report_lines.append(f"\n#### 🎯 [다음 시간 확인용 보충 추천 퀴즈 1개]")
+        if "원가" in course_name:
+            rec_q = {
+                "question": "다음 중 미래 의사결정에 차이를 유발하지 않아 의사결정에 고려해서는 안 되는 원가는?",
+                "options": ["기회원가", "매몰원가 (기발생원가)", "회피가능원가", "증분원가"],
+                "answer": 1,
+                "explanation": "매몰원가는 과거의 의사결정에 의해 이미 발생한 원가로서 미래 어떤 대안을 선택하든 변하지 않으므로 비관련원가입니다."
+            }
+        elif "감사" in course_name:
+            rec_q = {
+                "question": "다음 중 감사인이 내부통제제도를 평가하는 주된 목적으로 가장 옳은 것은?",
+                "options": ["경영진의 부정행위를 100% 적발하기 위해", "통제위험을 평가하여 실증절차의 성격, 시기, 범위를 결정하기 위해", "재무제표의 모든 오류를 수정하기 위해", "회사의 주가를 안정시키기 위해"],
+                "answer": 1,
+                "explanation": "내부통제 평가는 통제위험을 사정하여 적발위험을 관리하기 위한 실증절차의 범위를 결정하기 위함입니다."
+            }
+        else:
+            rec_q = {
+                "question": "다음 중 ISSB IFRS S2 기준에 따른 기후 관련 위험 중 전환위험(Transition Risk)에 해당하는 것은?",
+                "options": ["홍수나 가뭄 등 기상 이변으로 인한 물리적 피해", "탄소세 인상 및 친환경 기술 규제 강화", "지진으로 인한 사업장 파손", "해수면 상승으로 인한 부지 침수"],
+                "answer": 1,
+                "explanation": "탄소세 및 규제 강화, 저탄소 기술로의 전환 비용은 정책 및 법률 위험인 전환위험에 해당합니다."
+            }
+
+        report_lines.append(f"- **문제**: {rec_q['question']}")
+        for opt_idx, opt_str in enumerate(rec_q['options']):
+            check = " (★정답)" if opt_idx == rec_q['answer'] else ""
+            report_lines.append(f"  {opt_idx+1}. {opt_str}{check}")
+        report_lines.append(f"- **해설**: {rec_q['explanation']}")
+
+        return {
+            "analysis_raw": "\n".join(report_lines),
+            "summary": f"[{course_name} {session_name}] 수업자료 및 퀴즈 채점 결과 종합 분석 완료",
+            "opinions_count": len(opinions),
+            "quizzes_count": len(quizzes_data),
+            "has_material": has_mat,
+            "recommended_quiz": rec_q
+        }
 
     def _generate_fallback_response(self, question: str) -> str:
         q = question.lower()
@@ -150,26 +315,6 @@ class AITutor:
                 "대해 궁금하신 점이 있으시면 상세히 안내해 드리겠습니다. 어떤 부분이 가장 궁금하신가요?"
             )
 
-    def _generate_fallback_analysis(self, opinions: list) -> dict:
-        total = len(opinions)
-        cat_counts = {}
-        for op in opinions:
-            c = op.get("category", "기타")
-            cat_counts[c] = cat_counts.get(c, 0) + 1
-
-        top_cat = max(cat_counts, key=cat_counts.get) if cat_counts else "이해 완료"
-
-        analysis_text = (
-            f"### 📊 학생 의견 분석 요약 (총 {total}건 접수)\n\n"
-            f"1. **이해도 전반**: 가장 많은 비중을 차지한 반응은 **'{top_cat}'**({cat_counts.get(top_cat, 0)}건)입니다.\n"
-            f"2. **주요 난점**: 학생들이 이론 수식 및 실제 실무 사례(ESG Scope 산정 및 회계감사 위험 사례) 적용에 대한 추가 설명을 요청하고 있습니다.\n"
-            f"3. **다음 수업 제안**:\n"
-            f"   - 핵심 수식 복습 및 5분 미니 퀴즈 진행\n"
-            f"   - 실제 상장사 사업보고서 내 ESG 공시 주석 예시 시연\n"
-            f"4. **추천 퀴즈**:\n"
-            f"   - 문제: 온실가스 배출량 중 기업이 구매한 전력이나 냉난방 사용으로 인해 발생하는 간접 배출은?\n"
-            f"   - 정답: Scope 2 (스코프 2)\n"
-        )
     def analyze_cumulative_data(self, course_name: str, course_data: dict) -> dict:
         """
         과목별 누적 데이터(주차/차시별 피드백, 퀴즈 결과 등)를 종합 분석하여
@@ -278,4 +423,3 @@ class AITutor:
 
 # 전역 싱글톤 인스턴스
 ai_tutor = AITutor()
-

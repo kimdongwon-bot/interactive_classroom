@@ -24,10 +24,13 @@ def add_header(response):
     response.headers['Expires'] = '-1'
     return response
 
+from material_parser import extract_text_from_file
+
 PROFESSOR_PIN = os.getenv('PROFESSOR_PIN', '2528')
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 DATA_FILE = os.path.join(DATA_DIR, 'history.json')
 BACKUP_FILE = os.path.join(DATA_DIR, 'history.json.bak')
+MATERIALS_DIR = os.path.join(DATA_DIR, 'materials')
 data_lock = threading.Lock()
 
 CATEGORY_KEYS = ["이해 완료", "조금 어려움", "질문 있음", "예제 필요"]
@@ -551,19 +554,147 @@ def api_get_graph_data():
     sess = request.args.get('session')
     return jsonify(get_graph_data(course, sess))
 
-@app.route('/api/analyze_opinions', methods=['POST'])
-def api_analyze_opinions():
-    """현재 선택된 과목 및 세션의 의견 분석"""
+# --- 수업자료(PDF/PPT) 관리 API ---
+
+@app.route('/api/upload_material', methods=['POST'])
+def api_upload_material():
+    """교수자: 특정 과목 및 주차(세션)의 수업자료(PDF, PPTX) 업로드 및 텍스트 추출 저장"""
+    if not session.get('is_professor'):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if 'file' not in request.files:
+        return jsonify({"error": "업로드된 파일이 없습니다."}), 400
+
+    file = request.files['file']
+    course = request.form.get('course', '원가회계')
+    sess = request.form.get('session', '1주차')
+
+    if not file.filename:
+        return jsonify({"error": "선택된 파일명이 없습니다."}), 400
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ['.pdf', '.pptx', '.ppt', '.txt', '.md']:
+        return jsonify({"error": f"지원되지 않는 파일 형식입니다 ({ext}). PDF 또는 PPTX 파일을 업로드해 주세요."}), 400
+
+    try:
+        os.makedirs(MATERIALS_DIR, exist_ok=True)
+        # 안전한 파일명 생성
+        safe_fname = f"{uuid.uuid4().hex[:6]}_{file.filename}"
+        saved_path = os.path.join(MATERIALS_DIR, safe_fname)
+        file.save(saved_path)
+
+        # 텍스트 및 슬라이드 구조 추출
+        parse_res = extract_text_from_file(saved_path)
+        if not parse_res.get("success"):
+            return jsonify({"error": parse_res.get("error", "자료 텍스트 추출 실패")}), 400
+
+        mat_data = {
+            "filename": file.filename,
+            "file_type": parse_res.get("file_type", ext[1:]),
+            "total_units": parse_res.get("total_units", 1),
+            "summary_snippet": parse_res.get("summary_snippet", ""),
+            "full_text": parse_res.get("full_text", ""),
+            "uploaded_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+        data = load_data()
+        if course in data.get("courses", {}):
+            data["courses"][course].setdefault("materials", {})[sess] = mat_data
+            save_data(data)
+
+        return jsonify({
+            "success": True,
+            "material": {
+                "filename": mat_data["filename"],
+                "file_type": mat_data["file_type"],
+                "total_units": mat_data["total_units"],
+                "uploaded_at": mat_data["uploaded_at"]
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": f"파일 저장 중 오류가 발생했습니다: {str(e)}"}), 500
+
+@app.route('/api/material_info', methods=['GET'])
+def api_get_material_info():
+    """현재 선택된 과목 및 세션의 수업자료 등록 정보 조회"""
+    course = request.args.get('course', '원가회계')
+    sess = request.args.get('session', '1주차')
+    data = load_data()
+    mat = data.get("courses", {}).get(course, {}).get("materials", {}).get(sess)
+    if mat:
+        return jsonify({
+            "has_material": True,
+            "filename": mat.get("filename"),
+            "file_type": mat.get("file_type"),
+            "total_units": mat.get("total_units"),
+            "uploaded_at": mat.get("uploaded_at"),
+            "summary_snippet": mat.get("summary_snippet", "")[:300]
+        })
+    return jsonify({"has_material": False})
+
+@app.route('/api/delete_material', methods=['POST'])
+def api_delete_material():
+    """현재 선택된 과목 및 세션의 등록된 수업자료 삭제"""
     if not session.get('is_professor'):
         return jsonify({"error": "Unauthorized"}), 401
 
     req_data = request.get_json(silent=True) or {}
-    course = req_data.get('course')
-    sess = req_data.get('session')
+    course = req_data.get('course', '원가회계')
+    sess = req_data.get('session', '1주차')
 
+    data = load_data()
+    if course in data.get("courses", {}) and "materials" in data["courses"][course]:
+        if sess in data["courses"][course]["materials"]:
+            del data["courses"][course]["materials"][sess]
+            save_data(data)
+
+    return jsonify({"success": True})
+
+@app.route('/api/analyze_opinions', methods=['POST'])
+def api_analyze_opinions():
+    """현재 선택된 과목 및 세션의 종합 분석 (수업자료 + 퀴즈 채점결과 + 실시간 피드백)"""
+    if not session.get('is_professor'):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    req_data = request.get_json(silent=True) or {}
+    data = load_data()
+    course = req_data.get('course') or data.get('active_course', '원가회계')
+    sess = req_data.get('session') or data.get('active_session', '1주차')
+
+    # 1. 실시간 의견 피드백 수집
     graph_data = get_graph_data(course, sess)
     opinions = graph_data.get("recent_opinions", [])
-    analysis = ai_tutor.analyze_opinions(opinions)
+
+    # 2. 수업자료(PDF/PPT) 내용 조회
+    mat_data = data.get("courses", {}).get(course, {}).get("materials", {}).get(sess, {})
+
+    # 3. 해당 주차 퀴즈 및 상세 채점 결과(선택지별 학생 분포) 수집
+    quizzes_data = []
+    course_quizzes = data.get("courses", {}).get(course, {}).get("quizzes", [])
+    for q in course_quizzes:
+        q_session = q.get("session", "1주차")
+        if sess == "전체" or q_session == sess:
+            q_id = q.get("id")
+            stats_info = get_quiz_stats_dict(q_id)
+            quizzes_data.append({
+                "id": q_id,
+                "question": q.get("question"),
+                "options": q.get("options", []),
+                "answer": q.get("answer", 0),
+                "explanation": q.get("explanation", ""),
+                "is_published": q.get("is_published", False),
+                "total_responses": stats_info.get("total_responses", 0),
+                "stats": stats_info.get("stats", {})
+            })
+
+    # 4. 3중 결합 AI 정밀 분석 실행
+    analysis = ai_tutor.analyze_session_comprehensive(
+        course_name=course,
+        session_name=sess,
+        material_data=mat_data,
+        quizzes_data=quizzes_data,
+        opinions=opinions
+    )
     return jsonify(analysis)
 
 @app.route('/api/analyze_cumulative', methods=['POST'])

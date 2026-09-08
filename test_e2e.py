@@ -556,6 +556,76 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
         prof_socket.disconnect()
         student_socket.disconnect()
 
+    def test_11_material_upload_and_comprehensive_ai_analysis(self):
+        print("\n--- [Test 11] 주차별 수업자료(PDF/PPT) 업로드 및 AI 종합 분석 보고서 검증 ---")
+        import io
+
+        with self.client.session_transaction() as sess:
+            sess['is_professor'] = True
+
+        # 1. 수업자료 업로드 (원가회계 1주차 교안)
+        sample_content = "제1장 원가회계의 기초 및 CVP 손익분기점 분석\n총원가는 재료원가, 노무원가, 경비로 구성된다.\n고정비와 변동비 분류 원리.".encode('utf-8')
+        data = {
+            'course': '원가회계',
+            'session': '1주차',
+            'file': (io.BytesIO(sample_content), '원가회계_1주차_교안.txt')
+        }
+        res_upload = self.client.post('/api/upload_material', data=data, content_type='multipart/form-data')
+        self.assertEqual(res_upload.status_code, 200)
+        data_up = json.loads(res_upload.data)
+        self.assertTrue(data_up.get('success'))
+        self.assertEqual(data_up['material']['filename'], '원가회계_1주차_교안.txt')
+        print("  ✓ 수업자료(교안) 업로드 및 텍스트 자동 파싱 저장 확인")
+
+        # 2. 수업자료 정보 조회
+        res_info = self.client.get('/api/material_info?course=원가회계&session=1주차')
+        self.assertEqual(res_info.status_code, 200)
+        data_info = json.loads(res_info.data)
+        self.assertTrue(data_info.get('has_material'))
+        self.assertEqual(data_info.get('filename'), '원가회계_1주차_교안.txt')
+        print("  ✓ 수업자료 상태 조회 API (/api/material_info) 연동 확인")
+
+        # 3. 퀴즈 데이터 및 학생 피드백 준비
+        prof_socket = socketio.test_client(self.app)
+        student_socket = socketio.test_client(self.app)
+
+        prof_socket.emit('send_quiz', {
+            'course': '원가회계',
+            'session': '1주차',
+            'question': '총원가의 3요소로 옳은 것은?',
+            'options': ['재료원가, 노무원가, 경비', '고정비, 변동비, 준변동비', '직접비, 간접비, 기회원가', '관련원가, 매몰원가, 비제조원가'],
+            'answer': 0,
+            'explanation': '총원가는 재료원가, 노무원가, 제조경비의 합으로 구성됩니다.'
+        })
+
+        student_socket.emit('submit_opinion', {
+            'course': '원가회계',
+            'session': '1주차',
+            'category': '조금 어려움',
+            'text': '제조간접원가 배부 공식이 헷갈립니다.'
+        })
+
+        # 4. 종합 AI 분석 보고서 생성 (/api/analyze_opinions)
+        res_analysis = self.client.post('/api/analyze_opinions', json={'course': '원가회계', 'session': '1주차'})
+        self.assertEqual(res_analysis.status_code, 200)
+        data_analysis = json.loads(res_analysis.data)
+        raw_report = data_analysis.get('analysis_raw', '')
+
+        self.assertIn("학생들을 위한 맞춤형 학습 제안", raw_report)
+        self.assertIn("교수자를 위한 다음 강의 개선 제안", raw_report)
+        print("  ✓ 수업자료 + 퀴즈 채점결과 + 학생 피드백 3중 결합 AI 종합 분석 보고서 검증 완료")
+
+        # 5. 자료 삭제
+        res_del = self.client.post('/api/delete_material', json={'course': '원가회계', 'session': '1주차'})
+        self.assertEqual(res_del.status_code, 200)
+        res_info_after = self.client.get('/api/material_info?course=원가회계&session=1주차')
+        self.assertFalse(json.loads(res_info_after.data).get('has_material'))
+        print("  ✓ 수업자료 삭제 API 연동 확인")
+
+        prof_socket.emit('cancel_quiz')
+        prof_socket.disconnect()
+        student_socket.disconnect()
+
 if __name__ == '__main__':
     unittest.main()
 
