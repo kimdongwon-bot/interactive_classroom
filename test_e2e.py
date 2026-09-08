@@ -645,6 +645,73 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
         prof_socket.disconnect()
         student_socket.disconnect()
 
+    def test_12_student_self_study_ai_report(self):
+        print("\n--- [Test 12] 학생 자가학습 맞춤형 AI 분석보고서 발행 및 실시간 배포 검증 ---")
+        prof_socket = socketio.test_client(self.app)
+        student_socket = socketio.test_client(self.app)
+
+        with self.client.session_transaction() as sess:
+            sess['is_professor'] = True
+
+        # 1. 퀴즈 1건 및 학생 피드백 제출
+        prof_socket.emit('send_quiz', {
+            'course': '원가회계',
+            'session': '1주차',
+            'question': '원가의 추적가능성에 따른 분류는?',
+            'options': ['직접원가와 간접원가', '제조원가와 비제조원가', '변동원가와 고정원가', '기회원가와 매몰원가'],
+            'answer': 0,
+            'explanation': '추적가능성에 따라 직접원가와 간접원가로 분류합니다.'
+        })
+        student_socket.emit('submit_opinion', {
+            'course': '원가회계',
+            'session': '1주차',
+            'category': '조금 어려움',
+            'text': '간접원가 추적 구분이 헷갈립니다.'
+        })
+
+        # 2. 교수 종합 분석 보고서 생성 실행 (/api/analyze_opinions)
+        res_analysis = self.client.post('/api/analyze_opinions', json={'course': '원가회계', 'session': '1주차'})
+        self.assertEqual(res_analysis.status_code, 200)
+        data = json.loads(res_analysis.data)
+
+        # 교수용 보고서와 학생용 보고서가 모두 도출되었는지 확인
+        self.assertTrue(bool(data.get('analysis_raw')), "교수용 분석 보고서가 존재해야 합니다.")
+        self.assertTrue(bool(data.get('student_report')), "학생 자가학습용 분석 보고서가 존재해야 합니다.")
+        student_report = data['student_report']
+        self.assertIn("자가학습을 위한 맞춤형 AI 분석보고서", student_report)
+        print("  ✓ 교수 종합 분석 시 학생 자가학습 보고서 동시 생성 확인")
+
+        # 3. 학생 소켓 실시간 브로드캐스트 수신 확인
+        received = student_socket.get_received()
+        report_events = [e for e in received if e['name'] == 'student_report_updated']
+        self.assertTrue(len(report_events) > 0, "학생 소켓에 student_report_updated 이벤트가 전달되어야 합니다.")
+        event_payload = report_events[-1]['args'][0]
+        self.assertEqual(event_payload['course'], '원가회계')
+        self.assertEqual(event_payload['session'], '1주차')
+        self.assertIn("자가학습을 위한 맞춤형 AI 분석보고서", event_payload['student_report'])
+        print("  ✓ 학생 소켓 student_report_updated 실시간 브로드캐스트 수신 확인")
+
+        # 4. 학생 조회 API 검증 (/api/student_report)
+        # 1주차(발행된 주차) 조회 -> has_report: True
+        res_rep = self.client.get('/api/student_report?course=원가회계&session=1주차')
+        self.assertEqual(res_rep.status_code, 200)
+        rep_json = json.loads(res_rep.data)
+        self.assertTrue(rep_json.get('has_report'))
+        self.assertEqual(rep_json.get('course'), '원가회계')
+        self.assertEqual(rep_json.get('session'), '1주차')
+        self.assertIn("자가학습을 위한 맞춤형 AI 분석보고서", rep_json.get('student_report'))
+        print("  ✓ 학생 전용 보고서 조회 API (/api/student_report) 정상 응답 확인")
+
+        # 3주차(미발행 주차) 조회 -> has_report: False
+        res_empty = self.client.get('/api/student_report?course=원가회계&session=3주차')
+        self.assertEqual(res_empty.status_code, 200)
+        self.assertFalse(json.loads(res_empty.data).get('has_report'))
+        print("  ✓ 미발행 주차에 대한 has_report: False 정상 응답 확인")
+
+        prof_socket.emit('cancel_quiz')
+        prof_socket.disconnect()
+        student_socket.disconnect()
+
 if __name__ == '__main__':
     unittest.main()
 

@@ -643,12 +643,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const analysisCard = document.getElementById('analysisResultCard');
   const analysisContent = document.getElementById('analysisContent');
   const applyQuizBtn = document.getElementById('applySuggestedQuizBtn');
+  const studentReportSyncNotice = document.getElementById('studentReportSyncNotice');
   let lastSuggestedQuiz = null;
 
   analyzeBtn.addEventListener('click', async () => {
     analyzeBtn.disabled = true;
     analyzeBtn.innerText = '수업자료·채점결과·피드백 3중 결합 분석 중... ⏳';
     analysisCard.classList.add('active');
+    if (studentReportSyncNotice) studentReportSyncNotice.style.display = 'none';
     analysisContent.innerText = `[${currentCourse} - ${currentSession}] 주차별 수업자료와 퀴즈 채점 결과, 학생 피드백을 결합 분석 중입니다... 잠시만 기다려 주세요.`;
 
     try {
@@ -663,6 +665,14 @@ document.addEventListener('DOMContentLoaded', () => {
         analysisContent.innerText = data.analysis_raw;
       } else {
         analysisContent.innerText = `${data.summary || '분석 완료'}\n\n제안: ${data.suggestions || '없음'}`;
+      }
+
+      if (studentReportSyncNotice) {
+        if (data.student_report) {
+          studentReportSyncNotice.style.display = 'block';
+        } else {
+          studentReportSyncNotice.style.display = 'none';
+        }
       }
 
       if (data.recommended_quiz) {

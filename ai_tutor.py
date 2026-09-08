@@ -142,7 +142,9 @@ class AITutor:
             f"2. 절대로 존재하지 않는 가상의 학생 피드백, 가상의 질문, 가상의 의견을 지어내거나 날조(Hallucination)하지 마십시오.\n"
             f"3. 만약 학생 피드백이 0건이거나 없는 경우, 절대로 가상 피드백을 꾸며내지 말고 '접수된 실시간 학생 피드백이 없어, 등록된 수업자료와 퀴즈 채점 결과를 중심으로 분석합니다'라고 명확히 기재하십시오.\n"
             f"4. 만약 수업자료가 등록되지 않은 경우에도 임의로 다른 주차 내용(예: 1주차인데 후반부 CVP나 표준원가, ABC 등)을 끌어오지 말고, 해당 주차의 실제 퀴즈와 제공된 범위 내에서만 조언하십시오.\n\n"
-            f"보고서는 반드시 아래 2개 대단원 순서대로 구체적이고 전문적으로 작성해야 합니다:\n\n"
+            f"보고서는 반드시 아래 2개 독립된 보고서 형식으로 작성해야 합니다. 각 보고서의 시작을 아래 구분 태그로 명확히 표시하세요:\n\n"
+            f"=== PROFESSOR_REPORT ===\n"
+            f"# [{course_name} {session_name}] 교수자용 AI 종합 분석 및 강의 개선 보고서\n\n"
             f"### 1. 🎓 학생들을 위한 맞춤형 학습 제안 (최우선 작성)\n"
             f"출제된 퀴즈 문제별로 아래 두 그룹을 명확히 분리하여 구체적인 학습 방향을 제시하세요:\n"
             f"- ✅ **정답을 맞힌 학생들을 위한 심화 학습 가이드**: 이번 주차 실제 문제와 수업자료의 해당 개념을 연결하여 더 깊이 있게 탐구할 수 있는 심화 질문/과제 제안\n"
@@ -150,16 +152,47 @@ class AITutor:
             f"### 2. 👨‍🏫 교수자를 위한 다음 강의 개선 제안\n"
             f"- 🔍 **다음 강의 차시 시작 시 5분 필수 보충 설명 사항**: 이번 시간 퀴즈 중 정답률이 낮았거나 오답자가 많은 개념에 대해 다음 수업 첫머리에 꼭 짚어주어야 할 핵심 설명 포인트\n"
             f"- 💡 **학생 피드백 기반 강의 전달 방식 개선안**: 실제 접수된 학생 피드백에 기반한 강의 개선안 (접수된 피드백이 없을 경우 '피드백 미접수로 일반적인 개념 전달 강화 권장'으로 명시)\n"
-            f"- 🎯 **확인용 보충 추천 퀴즈 1개**: 이번 차시 퀴즈와 수업자료 내용에 직접 부합하는 4지선다 퀴즈 (문제, 보기 4개, 정답, 해설)\n"
+            f"- 🎯 **확인용 보충 추천 퀴즈 1개**: 이번 차시 퀴즈와 수업자료 내용에 직접 부합하는 4지선다 퀴즈 (문제, 보기 4개, 정답, 해설)\n\n"
+            f"=== STUDENT_REPORT ===\n"
+            f"# 📖 [{course_name} {session_name}] 자가학습을 위한 맞춤형 AI 분석보고서\n"
+            f"*(교수님이 올린 주차별 수업자료, 실시간 퀴즈 풀이 결과, 동료 학생들의 피드백을 종합한 학생 자가학습 가이드입니다.)*\n\n"
+            f"### 1. 📚 이번 주차 핵심 교안 요약 및 필수 개념\n"
+            f"- 교수님이 제공한 수업자료의 핵심 내용과 반드시 암기/이해해야 할 핵심 원리를 친절하게 요약\n\n"
+            f"### 2. 📝 퀴즈 풀이 결과 분석 및 자가진단 (정답자 심화 & 오답자 복습)\n"
+            f"- 출제된 문제별 정답 기준 및 해설\n"
+            f"- 오답 함정 분석: 많은 학생들이 헷갈렸던 오답 보기와 그 이유\n"
+            f"- 정답을 맞힌 학생들을 위한 심화 탐구 질문\n"
+            f"- 오답을 선택한 학생들을 위한 구체적인 복습 포인트 및 교안 재정독 가이드\n\n"
+            f"### 3. 💬 동료 학생 주요 질문 및 피드백 Q&A 해설\n"
+            f"- 학생들이 수업 중 남긴 질문/어려움에 대해 AI 조교로서 명쾌하고 알기 쉽게 보충 개념 설명\n\n"
+            f"### 4. 🎯 실력 점검을 위한 자가진단 보충 퀴즈\n"
+            f"- 이번 차시 이해도를 스스로 점검해볼 수 있는 4지선다 퀴즈 1개와 정답 및 친절한 해설\n"
         )
 
         if self.client:
             try:
                 response = self.client.generate_content(full_prompt)
                 if response and response.text:
+                    resp_text = response.text.strip()
+                    prof_report = resp_text
+                    student_report = ""
+
+                    if "=== STUDENT_REPORT ===" in resp_text:
+                        parts = resp_text.split("=== STUDENT_REPORT ===")
+                        prof_report = parts[0].replace("=== PROFESSOR_REPORT ===", "").strip()
+                        student_report = parts[1].strip()
+                    elif "=== PROFESSOR_REPORT ===" in resp_text:
+                        prof_report = resp_text.replace("=== PROFESSOR_REPORT ===", "").strip()
+
+                    # 만약 학생 보고서가 분리되지 않은 경우 비상 생성 보완
+                    if not student_report:
+                        fallback_both = self._generate_fallback_comprehensive_analysis(course_name, session_name, material_data, quizzes_data, opinions)
+                        student_report = fallback_both.get("student_report", "")
+
                     return {
-                        "analysis_raw": response.text.strip(),
-                        "summary": f"[{course_name} {session_name}] 수업자료·채점결과·피드백 3중 결합 AI 정밀 분석이 완료되었습니다.",
+                        "analysis_raw": prof_report,
+                        "student_report": student_report,
+                        "summary": f"[{course_name} {session_name}] 수업자료·채점결과·피드백 3중 결합 AI 정밀 분석 및 학생 자가학습 보고서 발행이 완료되었습니다.",
                         "opinions_count": len(opinions),
                         "quizzes_count": len(quizzes_data),
                         "has_material": bool(material_data and material_data.get("full_text"))
@@ -167,7 +200,7 @@ class AITutor:
             except Exception as e:
                 logger.error(f"종합 세션 분석 중 Gemini API 오류: {e}")
 
-        # 폴백 분석 생성
+        # 폴백 분석 생성 (교수용 + 학생용 동시 생성)
         return self._generate_fallback_comprehensive_analysis(course_name, session_name, material_data, quizzes_data, opinions)
 
     def analyze_opinions(self, opinions: list) -> dict:
@@ -185,6 +218,7 @@ class AITutor:
         has_mat = bool(material_data and material_data.get("full_text"))
         mat_name = material_data.get("filename", "교안") if has_mat else None
 
+        # --- 1. 교수자용 보고서 생성 ---
         report_lines = [
             f"### 📊 [{course_name} - {session_name}] AI 정밀 학습 분석 및 강의 개선 리포트",
             f"*(수업자료: {'📄 ' + mat_name if has_mat else '미등록(기본 커리큘럼 기준)'} | 퀴즈: {len(quizzes_data)}문제 | 학생 피드백: {len(opinions)}건)*\n",
@@ -202,7 +236,6 @@ class AITutor:
                 ans_text = options[ans_idx] if ans_idx < len(options) else f"보기 {ans_idx+1}"
                 rate_str = f"{(correct_cnt/total_resp*100):.1f}%" if total_resp > 0 else "집계 중"
 
-                # 가장 오답률 높은 보기 탐색
                 wrong_counts = {i: stats.get(i, 0) for i in range(len(options)) if i != ans_idx}
                 most_wrong_idx = max(wrong_counts, key=wrong_counts.get) if wrong_counts and max(wrong_counts.values()) > 0 else None
                 most_wrong_text = options[most_wrong_idx] if most_wrong_idx is not None and most_wrong_idx < len(options) else None
@@ -281,9 +314,71 @@ class AITutor:
             report_lines.append(f"  {opt_idx+1}. {opt_str}{check}")
         report_lines.append(f"- **해설**: {rec_q['explanation']}")
 
+        # --- 2. 학생 자가학습용 맞춤형 보고서 생성 ---
+        student_report_lines = [
+            f"# 📖 [{course_name} - {session_name}] 자가학습을 위한 맞춤형 AI 분석보고서",
+            f"*(교수 제공 수업자료, 퀴즈 풀이 결과, 학생 피드백을 종합한 자가학습 가이드입니다.)*\n",
+            "---",
+            "### 1. 📚 이번 주차 핵심 교안 요약 및 필수 개념"
+        ]
+        if has_mat:
+            student_report_lines.append(f"- **등록 교안({mat_name}) 핵심 요약**:")
+            snippet = material_data.get("summary_snippet") or (material_data.get("full_text", "")[:300] + "...")
+            student_report_lines.append(f"  {snippet}")
+        else:
+            student_report_lines.append(f"- **{course_name} {session_name} 핵심 학습 목표**:")
+            student_report_lines.append(f"  * 본 차시의 기초 원리 및 개념 정의를 복습하고, 각 분류 기준(추적가능성, 원가행태, 기능 등)의 차이를 명확히 구분하세요.")
+
+        student_report_lines.append("\n---")
+        student_report_lines.append("### 2. 📝 퀴즈 풀이 결과 분석 및 자가진단 (정답자 심화 & 오답자 복습)")
+        if quizzes_data:
+            for idx, q in enumerate(quizzes_data, 1):
+                ans_idx = int(q.get("answer", 0))
+                options = q.get("options", [])
+                stats = q.get("stats", {})
+                total_resp = q.get("total_responses", 0)
+                correct_cnt = stats.get(ans_idx, 0)
+                ans_text = options[ans_idx] if ans_idx < len(options) else f"보기 {ans_idx+1}"
+                rate_str = f"{(correct_cnt/total_resp*100):.1f}%" if total_resp > 0 else "집계 중"
+
+                wrong_counts = {i: stats.get(i, 0) for i in range(len(options)) if i != ans_idx}
+                most_wrong_idx = max(wrong_counts, key=wrong_counts.get) if wrong_counts and max(wrong_counts.values()) > 0 else None
+                most_wrong_text = options[most_wrong_idx] if most_wrong_idx is not None and most_wrong_idx < len(options) else None
+
+                student_report_lines.append(f"\n#### ■ [문제 {idx}] {q.get('question')} (정답: 보기 {ans_idx+1}번, 전체 정답률: {rate_str})")
+                student_report_lines.append(f"- **정답 해설**: {q.get('explanation', ans_text)}")
+                student_report_lines.append(f"- ✅ **정답을 맞힌 학생 자가진단**: 핵심 개념 '{ans_text}'의 기본 원리를 완벽히 숙지했습니다. 실무 사례와 결합하여 더 깊이 있는 전공 심화 탐구를 진행해 보세요.")
+                student_report_lines.append(f"- ❌ **오답을 선택한 학생 복습 가이드**:")
+                if most_wrong_text:
+                    student_report_lines.append(f"  * **함정 주의**: 많은 학생들이 **보기 {most_wrong_idx+1}번('{most_wrong_text}')**을 선택했습니다. 정답과의 개념적 차이를 명확히 비교 정리하세요.")
+                student_report_lines.append(f"  * **복습 권장**: {'수업 교안 ' + mat_name if has_mat else '이번 주차 교재'}의 해당 단원을 다시 정독하고, 오답 노트에 요약 정리를 직접 작성해보세요.")
+        else:
+            student_report_lines.append("\n*(이번 차시에 출제된 퀴즈가 없습니다.)*")
+
+        student_report_lines.append("\n---")
+        student_report_lines.append("### 3. 💬 동료 학생 주요 질문 및 피드백 Q&A 해설")
+        if opinions:
+            sample_ops = [op.get('text') for op in opinions if op.get('text')][:5]
+            if sample_ops:
+                student_report_lines.append(f"- **동료 학생들이 많이 남긴 질문/의견**: {'; '.join(sample_ops)}")
+                student_report_lines.append("- **AI 조교의 조언**: 질문이 많았던 용어와 개념에 대해 직관적인 비교 정리표를 만들어 복습하시면 혼동을 줄일 수 있습니다.")
+            else:
+                student_report_lines.append("- 수업 중 접수된 피드백을 바탕으로 학생들이 혼동하기 쉬운 핵심 개념을 복습하는 것을 권장합니다.")
+        else:
+            student_report_lines.append("- 접수된 실시간 피드백이 없어, 등록된 수업 교안과 퀴즈 채점 결과를 중심으로 자가학습 가이드를 구성했습니다.")
+
+        student_report_lines.append("\n---")
+        student_report_lines.append("### 4. 🎯 실력 점검을 위한 자가진단 보충 퀴즈")
+        student_report_lines.append(f"- **문제**: {rec_q['question']}")
+        for opt_idx, opt_str in enumerate(rec_q['options']):
+            check = " (★정답)" if opt_idx == rec_q['answer'] else ""
+            student_report_lines.append(f"  {opt_idx+1}. {opt_str}{check}")
+        student_report_lines.append(f"- **정답 및 해설**: 정답은 {rec_q['answer']+1}번입니다. {rec_q['explanation']}")
+
         return {
             "analysis_raw": "\n".join(report_lines),
-            "summary": f"[{course_name} {session_name}] 수업자료 및 퀴즈 채점 결과 종합 분석 완료",
+            "student_report": "\n".join(student_report_lines),
+            "summary": f"[{course_name} {session_name}] 수업자료 및 퀴즈 채점 결과 종합 분석 완료 (학생 자가학습 보고서 동시 발행)",
             "opinions_count": len(opinions),
             "quizzes_count": len(quizzes_data),
             "has_material": has_mat,

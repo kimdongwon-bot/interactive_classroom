@@ -717,7 +717,7 @@ def api_analyze_opinions():
                 "stats": stats_info.get("stats", {})
             })
 
-    # 4. 3중 결합 AI 정밀 분석 실행
+    # 4. 3중 결합 AI 정밀 분석 실행 (교수용 + 학생 자가학습용 동시 도출)
     analysis = ai_tutor.analyze_session_comprehensive(
         course_name=course,
         session_name=sess,
@@ -725,7 +725,52 @@ def api_analyze_opinions():
         quizzes_data=quizzes_data,
         opinions=opinions
     )
+
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    prof_report = analysis.get("analysis_raw", "")
+    student_report = analysis.get("student_report", "")
+
+    # 5. 과목 및 차시별 보고서 영구 저장
+    data = load_data()
+    if course in data.get("courses", {}):
+        data["courses"][course].setdefault("reports", {})[sess] = {
+            "professor_report": prof_report,
+            "student_report": student_report,
+            "created_at": now_str
+        }
+        save_data(data)
+
+    # 6. 학생 화면으로 자가학습 보고서 실시간 브로드캐스트
+    if student_report:
+        socketio.emit('student_report_updated', {
+            "course": course,
+            "session": sess,
+            "student_report": student_report,
+            "created_at": now_str
+        })
+
     return jsonify(analysis)
+
+@app.route('/api/student_report', methods=['GET'])
+def api_get_student_report():
+    """학생 화면: 현재 선택된 과목 및 세션의 자가학습 맞춤형 AI 보고서 조회"""
+    course = request.args.get('course', '원가회계')
+    sess = request.args.get('session', '1주차')
+    data = load_data()
+    report_obj = data.get("courses", {}).get(course, {}).get("reports", {}).get(sess)
+    if report_obj and report_obj.get("student_report"):
+        return jsonify({
+            "has_report": True,
+            "course": course,
+            "session": sess,
+            "student_report": report_obj.get("student_report"),
+            "created_at": report_obj.get("created_at")
+        })
+    return jsonify({
+        "has_report": False,
+        "course": course,
+        "session": sess
+    })
 
 @app.route('/api/analyze_cumulative', methods=['POST'])
 def api_analyze_cumulative():

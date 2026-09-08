@@ -821,3 +821,23 @@ header.app-header {
   white-space: pre-wrap;
 }
 
+/* Student Self-Study AI Report */
+.student-report-card {
+  transition: all 0.3s ease;
+}
+
+.student-report-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.student-report-body {
+  font-size: 0.95rem;
+  line-height: 1.85;
+  color: #1e293b;
+  white-space: pre-wrap;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: var(--radius-sm);
+  padding: 1.5rem;
+}
+

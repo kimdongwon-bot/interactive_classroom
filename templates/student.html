@@ -122,8 +122,34 @@
       </div>
 
     </div>
+
+    <!-- 학생 화면 맨 하단: 자가학습을 위한 맞춤형 AI 분석보고서 -->
+    <div class="card student-report-card" id="studentReportCard" style="margin-top: 2rem; background: #ffffff; border: 1px solid #c7d2fe; border-radius: var(--radius); box-shadow: var(--shadow-sm); overflow: hidden;">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e0e7ff; padding: 1.1rem 1.5rem; background: linear-gradient(135deg, #eef2ff, #f8fafc);">
+        <h2 style="font-size: 1.15rem; font-weight: 700; color: #1e1b4b; display: flex; align-items: center; gap: 0.5rem; margin: 0;">
+          <span>📖</span> [<span id="studentReportCourse">원가회계</span> - <span id="studentReportSession">1주차</span>] 자가학습을 위한 맞춤형 AI 분석보고서
+        </h2>
+        <span id="studentReportStatusBadge" class="status-badge" style="background: #e0e7ff; color: #3730a3; font-size: 0.8rem; font-weight: 700;">
+          실시간 연동
+        </span>
+      </div>
+      <div style="padding: 1.5rem;">
+        <div id="studentReportLoading" style="display: none; color: #4338ca; font-weight: 600; padding: 1.5rem 0; text-align: center;">
+          ⏳ 최신 AI 자가학습 보고서를 불러오는 중입니다...
+        </div>
+        <div id="studentReportEmpty" style="display: none; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 2.5rem 1rem; text-align: center; color: #64748b;">
+          <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">📑</div>
+          <p style="font-weight: 700; color: #334155; font-size: 1.05rem; margin-bottom: 0.35rem;">아직 발행된 자가학습 AI 보고서가 없습니다.</p>
+          <p style="font-size: 0.875rem;">교수님이 수업 중 [AI 종합 분석 보고서]를 생성하시면 이 자리에 자동으로 즉시 표시됩니다.</p>
+        </div>
+        <div id="studentReportContent" class="student-report-body" style="display: none;">
+          <!-- 마크다운/텍스트 보고서 내용 렌더링 -->
+        </div>
+      </div>
+    </div>
+
   </main>
 
-  <script src="/static/student.js?v=20260907_1"></script>
+  <script src="/static/student.js?v=20260908_4"></script>
 </body>
 </html>

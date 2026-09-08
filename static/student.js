@@ -148,6 +148,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof updateQuizDisplay === 'function') {
       updateQuizDisplay();
     }
+
+    // 현재 선택된 과목 및 차시의 자가학습 맞춤형 AI 보고서 조회
+    if (typeof fetchStudentReport === 'function') {
+      fetchStudentReport();
+    }
   }
 
   function renderChatTags() {
@@ -193,6 +198,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (typeof updateQuizDisplay === 'function') {
       updateQuizDisplay();
+    }
+    if (typeof fetchStudentReport === 'function') {
+      fetchStudentReport();
     }
   });
 
@@ -575,6 +583,87 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!text) return '';
     return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   }
+
+  // 5. 자가학습을 위한 맞춤형 AI 분석보고서 로직 (화면 맨 하단)
+  const studentReportCourse = document.getElementById('studentReportCourse');
+  const studentReportSession = document.getElementById('studentReportSession');
+  const studentReportStatusBadge = document.getElementById('studentReportStatusBadge');
+  const studentReportLoading = document.getElementById('studentReportLoading');
+  const studentReportEmpty = document.getElementById('studentReportEmpty');
+  const studentReportContent = document.getElementById('studentReportContent');
+
+  function updateStudentReportHeader() {
+    if (studentReportCourse) studentReportCourse.innerText = selectedCourse;
+    if (studentReportSession) studentReportSession.innerText = selectedSession;
+  }
+
+  async function fetchStudentReport() {
+    updateStudentReportHeader();
+    if (!studentReportContent) return;
+
+    if (studentReportLoading) studentReportLoading.style.display = 'block';
+    if (studentReportEmpty) studentReportEmpty.style.display = 'none';
+    if (studentReportContent) studentReportContent.style.display = 'none';
+    if (studentReportStatusBadge) {
+      studentReportStatusBadge.style.background = '#e0e7ff';
+      studentReportStatusBadge.style.color = '#3730a3';
+      studentReportStatusBadge.innerText = '동기화 확인 중...';
+    }
+
+    try {
+      const res = await fetch(`/api/student_report?course=${encodeURIComponent(selectedCourse)}&session=${encodeURIComponent(selectedSession)}`);
+      const data = await res.json();
+
+      if (studentReportLoading) studentReportLoading.style.display = 'none';
+
+      if (data.has_report && data.student_report) {
+        studentReportContent.innerText = data.student_report;
+        studentReportContent.style.display = 'block';
+        if (studentReportEmpty) studentReportEmpty.style.display = 'none';
+        if (studentReportStatusBadge) {
+          studentReportStatusBadge.style.background = '#dcfce7';
+          studentReportStatusBadge.style.color = '#15803d';
+          studentReportStatusBadge.innerText = `✓ 발행 완료 (${data.created_at || '최신'})`;
+        }
+      } else {
+        if (studentReportContent) studentReportContent.style.display = 'none';
+        if (studentReportEmpty) studentReportEmpty.style.display = 'block';
+        if (studentReportStatusBadge) {
+          studentReportStatusBadge.style.background = '#f1f5f9';
+          studentReportStatusBadge.style.color = '#64748b';
+          studentReportStatusBadge.innerText = '미발행';
+        }
+      }
+    } catch (err) {
+      console.warn('[Student] 학생 자가학습 보고서 로드 오류:', err);
+      if (studentReportLoading) studentReportLoading.style.display = 'none';
+      if (studentReportEmpty) studentReportEmpty.style.display = 'block';
+    }
+  }
+
+  // 실시간 보고서 발행 수신 (교수가 [✨ AI 종합 분석 보고서] 생성 시 브로드캐스트)
+  socket.on('student_report_updated', (data) => {
+    console.log('[Student] student_report_updated received:', data);
+    if (!data) return;
+    if (data.course === selectedCourse && data.session === selectedSession) {
+      if (studentReportLoading) studentReportLoading.style.display = 'none';
+      if (studentReportEmpty) studentReportEmpty.style.display = 'none';
+      if (studentReportContent) {
+        studentReportContent.innerText = data.student_report;
+        studentReportContent.style.display = 'block';
+      }
+      if (studentReportStatusBadge) {
+        studentReportStatusBadge.style.background = '#dcfce7';
+        studentReportStatusBadge.style.color = '#15803d';
+        studentReportStatusBadge.innerText = `✨ 새 보고서 도착! (${data.created_at || '방금'})`;
+        setTimeout(() => {
+          if (studentReportStatusBadge) {
+            studentReportStatusBadge.innerText = `✓ 발행 완료 (${data.created_at || '최신'})`;
+          }
+        }, 5000);
+      }
+    }
+  });
 
   loadCourses();
 });
