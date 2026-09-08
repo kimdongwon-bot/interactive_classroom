@@ -310,6 +310,7 @@ def logout_professor():
 
 @app.route('/api/courses', methods=['GET'])
 def api_get_courses():
+    sync_quizzes_from_storage()
     data = load_data()
     session_map = {c: data["courses"][c].get("sessions", []) for c in data["courses"]}
     is_prof = session.get('is_professor', False)
@@ -327,6 +328,7 @@ def api_get_courses():
 
 @app.route('/api/current_quiz', methods=['GET'])
 def api_get_current_quiz():
+    sync_quizzes_from_storage()
     data = load_data()
     is_prof = session.get('is_professor', False)
     filtered_quizzes = active_quizzes if is_prof else [q for q in active_quizzes if q.get("is_published", True)]
@@ -736,6 +738,7 @@ def api_analyze_opinions():
         data["courses"][course].setdefault("reports", {})[sess] = {
             "professor_report": prof_report,
             "student_report": student_report,
+            "recommended_quiz": analysis.get("recommended_quiz"),
             "created_at": now_str
         }
         save_data(data)
@@ -770,6 +773,32 @@ def api_get_student_report():
         "has_report": False,
         "course": course,
         "session": sess
+    })
+
+@app.route('/api/session_report', methods=['GET'])
+@app.route('/api/professor_report', methods=['GET'])
+def api_get_session_report():
+    """교수 화면: 특정 과목 및 세션의 기 생성된 AI 종합 분석 보고서 조회"""
+    course = request.args.get('course', '원가회계')
+    sess = request.args.get('session', '1주차')
+    data = load_data()
+    report_obj = data.get("courses", {}).get(course, {}).get("reports", {}).get(sess)
+    if report_obj and report_obj.get("professor_report"):
+        return jsonify({
+            "has_report": True,
+            "course": course,
+            "session": sess,
+            "professor_report": report_obj.get("professor_report"),
+            "student_report": report_obj.get("student_report", ""),
+            "recommended_quiz": report_obj.get("recommended_quiz"),
+            "created_at": report_obj.get("created_at")
+        })
+    return jsonify({
+        "has_report": False,
+        "course": course,
+        "session": sess,
+        "professor_report": "",
+        "student_report": ""
     })
 
 @app.route('/api/analyze_cumulative', methods=['POST'])

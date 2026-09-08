@@ -129,6 +129,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (typeof fetchMaterialInfo === 'function') {
         fetchMaterialInfo();
       }
+      if (typeof fetchSessionReport === 'function') {
+        fetchSessionReport();
+      }
     } catch (err) {
       console.error('과목 정보 로드 오류:', err);
     }
@@ -177,6 +180,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof fetchMaterialInfo === 'function') {
       fetchMaterialInfo();
     }
+    if (typeof refreshQuizzesFromServer === 'function') {
+      await refreshQuizzesFromServer();
+    }
+    if (typeof fetchSessionReport === 'function') {
+      fetchSessionReport();
+    }
 
     // 교수 화면에서 과목 변경 시 서버 활성 과목 및 학생 화면에 자동 동기화
     try {
@@ -198,11 +207,16 @@ document.addEventListener('DOMContentLoaded', () => {
     analysisTargetSession.innerText = currentSession;
     activeQuizFilter = 'ALL';
     fetchGraphData();
-    if (typeof renderProfessorQuizDashboard === 'function') {
+    if (typeof refreshQuizzesFromServer === 'function') {
+      await refreshQuizzesFromServer();
+    } else if (typeof renderProfessorQuizDashboard === 'function') {
       renderProfessorQuizDashboard();
     }
     if (typeof fetchMaterialInfo === 'function') {
       fetchMaterialInfo();
+    }
+    if (typeof fetchSessionReport === 'function') {
+      fetchSessionReport();
     }
 
     if (currentSession !== '전체') {
@@ -646,6 +660,35 @@ document.addEventListener('DOMContentLoaded', () => {
   const studentReportSyncNotice = document.getElementById('studentReportSyncNotice');
   let lastSuggestedQuiz = null;
 
+  async function fetchSessionReport() {
+    if (!analysisCard || !analysisContent) return;
+    try {
+      const res = await fetch(`/api/session_report?course=${encodeURIComponent(currentCourse)}&session=${encodeURIComponent(currentSession)}`);
+      const data = await res.json();
+      if (data.has_report && data.professor_report) {
+        analysisCard.classList.add('active');
+        analysisContent.innerText = data.professor_report;
+        if (studentReportSyncNotice) {
+          studentReportSyncNotice.style.display = data.student_report ? 'block' : 'none';
+        }
+        if (data.recommended_quiz) {
+          lastSuggestedQuiz = data.recommended_quiz;
+          if (applyQuizBtn) applyQuizBtn.style.display = 'inline-flex';
+        } else {
+          if (applyQuizBtn) applyQuizBtn.style.display = 'none';
+        }
+      } else {
+        // 이전 주차의 분석 결과 및 채점 데이터가 새 주차에 남아있지 않도록 리셋
+        analysisCard.classList.remove('active');
+        analysisContent.innerText = '';
+        if (applyQuizBtn) applyQuizBtn.style.display = 'none';
+        if (studentReportSyncNotice) studentReportSyncNotice.style.display = 'none';
+      }
+    } catch (err) {
+      console.warn('세션 AI 분석 보고서 조회 오류:', err);
+    }
+  }
+
   analyzeBtn.addEventListener('click', async () => {
     analyzeBtn.disabled = true;
     analyzeBtn.innerText = '수업자료·채점결과·피드백 3중 결합 분석 중... ⏳';
@@ -715,10 +758,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function getCurrentSessionQuizzes() {
     return activeQuizzes.filter(q => {
-      const cMatch = (!q.course || q.course === currentCourse);
-      const sMatch = (currentSession === '전체' || !q.session || q.session === currentSession);
+      if (!q || !q.question) return false;
+      const qCourse = (q.course || '원가회계').trim();
+      const qSession = (q.session || '1주차').trim();
+      const cMatch = (!qCourse || qCourse === currentCourse);
+      const sMatch = (currentSession === '전체' || qSession === currentSession);
       return cMatch && sMatch;
     });
+  }
+
+  async function refreshQuizzesFromServer() {
+    try {
+      const res = await fetch('/api/current_quiz');
+      const data = await res.json();
+      if (data) {
+        if (data.active_quizzes) activeQuizzes = data.active_quizzes;
+        if (data.quiz_stats) quizStats = data.quiz_stats;
+      }
+    } catch (err) {
+      console.warn('퀴즈 데이터 동기화 오류:', err);
+    } finally {
+      if (typeof renderProfessorQuizDashboard === 'function') {
+        renderProfessorQuizDashboard();
+      }
+    }
   }
 
   function renderProfessorQuizDashboard() {

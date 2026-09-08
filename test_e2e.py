@@ -712,6 +712,87 @@ class MultiCourseTeachingAppTestCase(unittest.TestCase):
         prof_socket.disconnect()
         student_socket.disconnect()
 
+    def test_13_session_switching_report_and_draft_isolation(self):
+        print("\n--- [Test 13] 주차 변경 시 AI 분석보고서 격리 및 2주차 임시저장 퀴즈 복원 검증 ---")
+        with self.client.session_transaction() as sess:
+            sess['is_professor'] = True
+
+        prof_socket = socketio.test_client(self.app)
+        student_socket = socketio.test_client(self.app)
+
+        # 1. 원가회계 2주차 임시 저장 퀴즈 등록
+        w2_draft = {
+            "id": "quiz_cost_w2_draft_1",
+            "course": "원가회계",
+            "session": "2주차",
+            "question": "Q1 다음 중 의사결정에 영향을 미치는 원가가 아닌 것은?",
+            "options": ["관련원가", "기발생원가", "기회원가", "관련원가와 기회원가 모두"],
+            "answer": 1,
+            "explanation": "기발생원가(매몰원가)는 과거의 의사결정으로 이미 발생한 원가로서 의사결정에 영향을 미치지 않는 비관련원가입니다.",
+            "is_published": False
+        }
+        prof_socket.emit('save_draft_quiz', w2_draft)
+
+        # 2. 교수 권한으로 /api/current_quiz 조회 -> 2주차 임시저장 퀴즈 정상 확인
+        res_prof = self.client.get('/api/current_quiz')
+        self.assertEqual(res_prof.status_code, 200)
+        prof_quizzes = json.loads(res_prof.data).get('active_quizzes', [])
+        w2_found = next((q for q in prof_quizzes if q.get('id') == 'quiz_cost_w2_draft_1'), None)
+        self.assertIsNotNone(w2_found, "교수 권한에서 2주차 임시 저장 퀴즈가 조회되어야 합니다.")
+        self.assertEqual(w2_found['session'], '2주차')
+        self.assertFalse(w2_found['is_published'])
+        self.assertEqual(w2_found['answer'], 1)
+        print("  ✓ 원가회계 2주차 임시저장 퀴즈 보관 및 교수 조회 정상 확인")
+
+        # 3. 학생(비인가) 권한으로 /api/current_quiz 조회 -> 임시저장 퀴즈는 학생에게 미노출
+        with self.client.session_transaction() as sess:
+            sess['is_professor'] = False
+
+        res_stud = self.client.get('/api/current_quiz')
+        self.assertEqual(res_stud.status_code, 200)
+        stud_quizzes = json.loads(res_stud.data).get('active_quizzes', [])
+        w2_in_student = next((q for q in stud_quizzes if q.get('id') == 'quiz_cost_w2_draft_1'), None)
+        self.assertIsNone(w2_in_student, "학생에게는 2주차 임시저장 퀴즈가 노출되지 않아야 합니다.")
+        print("  ✓ 2주차 임시저장 퀴즈의 학생 대상 철저한 비노출 격리 확인")
+
+        # 4. 세션 변경 시 AI 분석보고서 격리 검증 (/api/session_report, /api/professor_report)
+        with self.client.session_transaction() as sess:
+            sess['is_professor'] = True
+
+        # 1주차 분석보고서 생성
+        self.client.post('/api/analyze_opinions', json={'course': '원가회계', 'session': '1주차'})
+
+        # 1주차 보고서 조회 -> has_report: True
+        res_rep_w1 = self.client.get('/api/session_report?course=원가회계&session=1주차')
+        self.assertEqual(res_rep_w1.status_code, 200)
+        rep_w1 = json.loads(res_rep_w1.data)
+        self.assertTrue(rep_w1.get('has_report'))
+        self.assertEqual(rep_w1.get('session'), '1주차')
+        self.assertTrue(bool(rep_w1.get('professor_report')))
+        print("  ✓ 1주차 AI 분석보고서 저장 및 조회 확인")
+
+        # 2주차 보고서 조회 -> has_report: False (1주차 보고서가 2주차로 유출되지 않음)
+        res_rep_w2 = self.client.get('/api/session_report?course=원가회계&session=2주차')
+        self.assertEqual(res_rep_w2.status_code, 200)
+        rep_w2 = json.loads(res_rep_w2.data)
+        self.assertFalse(rep_w2.get('has_report'))
+        self.assertEqual(rep_w2.get('professor_report'), "")
+        print("  ✓ 2주차로 주차 변경 시 1주차 AI 보고서 잔존 차단 (격리 완료)")
+
+        # 5. 2주차 퀴즈 공개 전환 검증
+        prof_socket.emit('publish_quiz', {'quiz_id': 'quiz_cost_w2_draft_1'})
+        with self.client.session_transaction() as sess:
+            sess['is_professor'] = False
+        res_stud_pub = self.client.get('/api/current_quiz')
+        stud_quizzes_pub = json.loads(res_stud_pub.data).get('active_quizzes', [])
+        w2_pub = next((q for q in stud_quizzes_pub if q.get('id') == 'quiz_cost_w2_draft_1'), None)
+        self.assertIsNotNone(w2_pub, "공개 전환 후 학생 화면에서도 2주차 퀴즈가 노출되어야 합니다.")
+        print("  ✓ 2주차 퀴즈 학생 공개 전환 및 조회 연동 검증 완료")
+
+        prof_socket.emit('cancel_quiz')
+        prof_socket.disconnect()
+        student_socket.disconnect()
+
 if __name__ == '__main__':
     unittest.main()
 
