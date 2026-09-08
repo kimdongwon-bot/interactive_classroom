@@ -84,6 +84,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 2. 초기 과목 및 세션 데이터 로드
   let activeSessionMap = {};
+
+  // DOM 텍스트 안전 설정 헬퍼 (null 방어)
+  function setText(idOrEl, value) {
+    const el = (typeof idOrEl === 'string') ? document.getElementById(idOrEl) : idOrEl;
+    if (el && value !== undefined && value !== null) {
+      el.innerText = value;
+    }
+  }
+
+  // 기동 시 필수 DOM 요소 점검 (누락 시 콘솔 경고)
+  [
+    'courseTabs', 'sessionSelect', 'currentCourseDisplay', 'currentSessionDisplay',
+    'analysisTargetSession', 'materialCourseDisplay', 'materialSessionDisplay',
+    'quizCourseSelect', 'quizSessionSelect', 'quizQuestionInput', 'opt0', 'opt1', 'opt2', 'opt3',
+    'quizCorrectAnswer', 'quizExplanation', 'quizResultsContainer', 'cumulativeTrendChart'
+  ].filter(id => !document.getElementById(id))
+   .forEach(id => console.warn('[누락된 DOM 요소]', id));
+
   const courseTabs = document.getElementById('courseTabs');
   const sessionSelect = document.getElementById('sessionSelect');
   const currentCourseDisplay = document.getElementById('currentCourseDisplay');
@@ -226,11 +244,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     currentSession = sessionSelect.value;
 
-    currentCourseDisplay.innerText = currentCourse;
-    currentSessionDisplay.innerText = currentSession;
-    analysisTargetSession.innerText = currentSession;
+    setText('currentCourseDisplay', currentCourse);
+    setText('currentSessionDisplay', currentSession);
+    setText('analysisTargetSession', currentSession);
+    setText('materialCourseDisplay', currentCourse);
+    setText('materialSessionDisplay', currentSession);
 
-    syncQuizFormSelectors();
+    try {
+      syncQuizFormSelectors();
+    } catch (err) {
+      console.warn('퀴즈 폼 동기화 오류:', err);
+    }
 
     if (typeof renderProfessorQuizDashboard === 'function') {
       renderProfessorQuizDashboard();
@@ -249,18 +273,19 @@ document.addEventListener('DOMContentLoaded', () => {
     currentSession = (saved && available.includes(saved)) ? saved : (available[0] || '1주차');
     activeQuizFilter = 'ALL';
 
-    updateSessionDropdown();
-    fetchGraphData();
-    updateCumulativeStats();
-    if (typeof fetchMaterialInfo === 'function') {
-      fetchMaterialInfo();
+    try {
+      updateSessionDropdown();
+      updateCumulativeStats();
+    } catch (err) {
+      console.error('과목 전환 UI 갱신 오류:', err);
     }
-    if (typeof refreshQuizzesFromServer === 'function') {
-      await refreshQuizzesFromServer();
-    }
-    if (typeof fetchSessionReport === 'function') {
-      fetchSessionReport();
-    }
+
+    await Promise.allSettled([
+      fetchGraphData(),
+      refreshQuizzesFromServer(),
+      fetchMaterialInfo(),
+      fetchSessionReport()
+    ]);
 
     // 교수 화면에서 과목 변경 시 서버 활성 과목 및 학생 화면에 자동 동기화
     try {
@@ -280,22 +305,23 @@ document.addEventListener('DOMContentLoaded', () => {
   sessionSelect.addEventListener('change', async () => {
     currentSession = sessionSelect.value;
     activeSessionMap[currentCourse] = currentSession;
-    currentSessionDisplay.innerText = currentSession;
-    analysisTargetSession.innerText = currentSession;
     activeQuizFilter = 'ALL';
-    syncQuizFormSelectors();
-    fetchGraphData();
-    if (typeof refreshQuizzesFromServer === 'function') {
-      await refreshQuizzesFromServer();
-    } else if (typeof renderProfessorQuizDashboard === 'function') {
-      renderProfessorQuizDashboard();
+
+    try {
+      setText('currentSessionDisplay', currentSession);
+      setText('analysisTargetSession', currentSession);
+      setText('materialSessionDisplay', currentSession);
+      syncQuizFormSelectors();
+    } catch (err) {
+      console.error('세션 전환 UI 갱신 오류:', err);
     }
-    if (typeof fetchMaterialInfo === 'function') {
-      fetchMaterialInfo();
-    }
-    if (typeof fetchSessionReport === 'function') {
-      fetchSessionReport();
-    }
+
+    await Promise.allSettled([
+      fetchGraphData(),
+      refreshQuizzesFromServer(),
+      fetchMaterialInfo(),
+      fetchSessionReport()
+    ]);
 
     if (currentSession !== '전체') {
       try {
