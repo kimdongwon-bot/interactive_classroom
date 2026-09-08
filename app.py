@@ -586,10 +586,28 @@ def api_upload_material():
         # 텍스트 및 슬라이드 구조 추출
         parse_res = extract_text_from_file(saved_path)
         if not parse_res.get("success"):
+            if os.path.exists(saved_path):
+                try:
+                    os.remove(saved_path)
+                except Exception:
+                    pass
             return jsonify({"error": parse_res.get("error", "자료 텍스트 추출 실패")}), 400
+
+        data = load_data()
+        # 기존에 업로드된 이전 파일이 있다면 디스크에서 정리
+        old_mat = data.get("courses", {}).get(course, {}).get("materials", {}).get(sess, {})
+        old_saved_file = old_mat.get("saved_file")
+        if old_saved_file:
+            old_path = os.path.join(MATERIALS_DIR, old_saved_file)
+            if os.path.exists(old_path):
+                try:
+                    os.remove(old_path)
+                except Exception:
+                    pass
 
         mat_data = {
             "filename": file.filename,
+            "saved_file": safe_fname,
             "file_type": parse_res.get("file_type", ext[1:]),
             "total_units": parse_res.get("total_units", 1),
             "summary_snippet": parse_res.get("summary_snippet", ""),
@@ -597,7 +615,6 @@ def api_upload_material():
             "uploaded_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
 
-        data = load_data()
         if course in data.get("courses", {}):
             data["courses"][course].setdefault("materials", {})[sess] = mat_data
             save_data(data)
@@ -634,7 +651,7 @@ def api_get_material_info():
 
 @app.route('/api/delete_material', methods=['POST'])
 def api_delete_material():
-    """현재 선택된 과목 및 세션의 등록된 수업자료 삭제"""
+    """현재 선택된 과목 및 세션의 등록된 수업자료 삭제 및 디스크 정리"""
     if not session.get('is_professor'):
         return jsonify({"error": "Unauthorized"}), 401
 
@@ -645,6 +662,15 @@ def api_delete_material():
     data = load_data()
     if course in data.get("courses", {}) and "materials" in data["courses"][course]:
         if sess in data["courses"][course]["materials"]:
+            old_mat = data["courses"][course]["materials"][sess]
+            old_saved_file = old_mat.get("saved_file")
+            if old_saved_file:
+                old_path = os.path.join(MATERIALS_DIR, old_saved_file)
+                if os.path.exists(old_path):
+                    try:
+                        os.remove(old_path)
+                    except Exception:
+                        pass
             del data["courses"][course]["materials"][sess]
             save_data(data)
 
